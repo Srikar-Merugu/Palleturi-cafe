@@ -43,6 +43,7 @@ const ICONS = {
   box: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5v-9z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   power: '<path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>',
   cup: '<path d="M4 9.5h12V14a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9.5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 3.5c-.8.9.8 1.6 0 2.5M12 3.5c-.8.9.8 1.6 0 2.5"/>',
   samosa: '<path d="M12 4 3.5 19h17L12 4z"/><path d="M8.5 15h7M10 11.5h4"/>',
   bottle: '<path d="M10 2.5h4V5l1.6 2.6V20a1.8 1.8 0 0 1-1.8 1.8h-3.6A1.8 1.8 0 0 1 8.4 20V7.6L10 5V2.5z"/><path d="M8.4 12h7.2M8.4 16h7.2"/>',
@@ -286,17 +287,59 @@ async function stockSave(path, body, msg) {
 }
 
 
-/* ---------------- close the cafe for the day ---------------- */
-// Owner sees expected cash and the difference live. Staff count "blind":
-// they only enter what's in the drawer; the owner gets the difference.
-let closeBusy = false;
+/* ---------------- open (morning) and close (night) the cafe ---------------- */
+// Morning: Open cafe asks how much cash is in the drawer.
+// Night: Close cafe asks only for the cash in the drawer now; expected = morning cash + cash sales.
+// Owner sees expected cash and the difference live; staff count "blind".
+let dayBusy = false;
+const todayLong = () => new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+const diffText = d => d === 0 ? 'Matches ✓' : d < 0 ? rs(-d) + ' short' : '+' + rs(d) + ' extra';
+
+function dayButton() {
+  if (!S.opening && !S.closing) return ''; // the morning banner has the Open cafe button
+  return `<button class="btn close-btn" data-act="close-day">${ico('power', 18)} Close cafe</button>`;
+}
+function dayBanner() {
+  const o = S.opening, c = S.closing;
+  if (c) {
+    const d = c.diff;
+    return `<div class="day-banner closed">${ico('power', 20)}<div><b>Closed today at ${timeStr(new Date(c.at))}</b> by ${c.by} · cash ${rs(c.counted)}${d === undefined ? '' : ` · <span class="${d < 0 ? 'neg' : ''}">${diffText(d)}</span>`}</div></div>`;
+  }
+  if (o) return `<div class="day-banner open">${ico('sun', 20)}<div><b>Open since ${timeStr(new Date(o.at))}</b> · opening cash ${rs(o.float)} · by ${o.by}</div></div>`;
+  return `<div class="day-banner start">${ico('sun', 24)}<div class="txt"><b>Good morning! Open the cafe to start the day</b><div class="sub">Count the change in the cash drawer — tonight’s cash check uses it.</div></div>
+    <button class="btn gold" data-act="open-day">Open cafe</button></div>`;
+}
+
+function openOpenDay() {
+  const last = S.settings.lastFloat;
+  $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left" role="dialog" aria-label="Open cafe">
+    <div class="day-head sun">${ico('sun', 26)}<div><h1>Open cafe for today</h1><div class="sub">${todayLong()}</div></div></div>
+    <label class="big-label" for="op-cash">How much cash is in the drawer now?</label>
+    <div class="money"><span>₹</span><input id="op-cash" inputmode="numeric" placeholder="0" autocomplete="off"></div>
+    <p class="hint">Count the change kept for customers.${last ? ` Last time: ${rs(last)}.` : ''}</p>
+    <div class="row"><button class="btn ghost" data-act="close-modal">Cancel</button>
+      <button class="btn gold" id="op-go" data-act="open-day-go" disabled>${ico('sun', 18)} Open cafe</button></div>
+  </div></div>`;
+  $('#op-cash').focus();
+}
+async function openDayGo() {
+  if (dayBusy) return;
+  const v = ($('#op-cash').value || '').replace(/\D/g, ''); if (v === '') return;
+  dayBusy = true; $('#op-go').disabled = true;
+  const r = await op(() => api('/api/day/open', { method: 'POST', body: { float: +v } }));
+  dayBusy = false;
+  if (!r) { if ($('#op-go')) $('#op-go').disabled = false; return; }
+  closeModal(); toast(`Cafe opened · ${rs(r.float)} in the drawer`);
+}
+
 function openCloseDay() {
   const open = Object.entries(S.tables).filter(([, t]) => linesCount(t.lines) > 0);
   const openAmt = open.reduce((a, [, t]) => a + linesTotal(t.lines), 0);
   const owner = role === 'owner' && S.today;
+  const o = S.opening;
   $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left" role="dialog" aria-label="Close cafe">
-    <div class="close-head">${ico('power', 26)}<div><h1>Close cafe for today</h1><div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div></div>
-    ${open.length ? `<div class="warn">${ico('bell', 18)}<div><b>${open.length} table${open.length === 1 ? '' : 's'} still open · ${rs(openAmt)}</b><div>${open.map(([k]) => tname(+k)).join(', ')} — settle or clear them first, or they won’t be in today’s sales.</div></div></div>` : ''}
+    <div class="day-head">${ico('power', 26)}<div><h1>Close cafe for today</h1><div class="sub">${todayLong()}</div></div></div>
+    ${open.length ? `<div class="warn">${ico('bell', 18)}<div><b>${open.length} table${open.length === 1 ? '' : 's'} still open · ${rs(openAmt)}</b><div>${open.map(([k]) => tname(+k)).join(', ')} — settle or clear first, or they won’t count in today’s sales.</div></div></div>` : ''}
     ${S.pending.length ? `<div class="warn">${ico('bell', 18)}<div><b>${S.pending.length} QR order${S.pending.length === 1 ? '' : 's'} not accepted</b></div></div>` : ''}
     ${owner ? `<div class="close-sum">
         <div><span>Sales today</span><b>${rs(S.today.total)}</b></div>
@@ -304,54 +347,53 @@ function openCloseDay() {
         <div><span>Cash sales</span><b>${rs(S.today.cash)}</b></div>
         <div><span>Bills</span><b>${S.today.bills}</b></div>
       </div>` : ''}
-    <div class="field"><label for="cl-float">Opening cash (change kept in the drawer this morning)</label>
-      <div class="cash-in small"><span>₹</span><input id="cl-float" inputmode="numeric" value="${S.settings.lastFloat || ''}" placeholder="0"></div></div>
-    <div class="field"><label for="cl-cash"><b>Count the cash in the drawer now</b></label>
-      <div class="cash-in"><span>₹</span><input id="cl-cash" inputmode="numeric" placeholder="0" autocomplete="off"></div></div>
-    ${owner ? `<div class="change" id="cl-diff"><span>Expected ${rs((S.settings.lastFloat || 0) + S.today.cash)}</span><b>—</b></div>` : `<p class="sub" style="margin:-4px 0 14px">The owner will see if the cash matches.</p>`}
-    <div class="field"><label for="cl-note">Note (optional)</label><input id="cl-note" class="ipt" maxlength="200" placeholder="e.g. ₹100 given to milk vendor"></div>
+    ${o ? `<div class="kv">${ico('sun', 16)}<span>Morning cash</span><b>${rs(o.float)}</b><small>opened ${timeStr(new Date(o.at))}</small></div>`
+      : `<div class="field"><label for="cl-float">Cash in the drawer this morning <small>(cafe wasn’t opened in the app today)</small></label>
+          <div class="money sm"><span>₹</span><input id="cl-float" inputmode="numeric" placeholder="0" value="${S.settings.lastFloat || ''}"></div></div>`}
+    <label class="big-label" for="cl-cash">How much cash is in the drawer now?</label>
+    <div class="money"><span>₹</span><input id="cl-cash" inputmode="numeric" placeholder="0" autocomplete="off"></div>
+    ${owner ? `<div class="change" id="cl-diff"><span>Expected in drawer</span><b>${rs(closeExpected())}</b></div>` : `<p class="hint">The owner will see if the cash matches.</p>`}
+    <div class="field"><label for="cl-note">Note (optional)</label><input id="cl-note" maxlength="200" placeholder="e.g. ₹100 given to milk vendor"></div>
     <div class="row"><button class="btn ghost" data-act="close-modal">Cancel</button>
       <button class="btn gold" id="cl-go" data-act="close-day-go" disabled>${ico('power', 18)} Close cafe</button></div>
   </div></div>`;
   $('#cl-cash').focus();
 }
+function closeFloat() { return S.opening ? S.opening.float : parseInt(($('#cl-float')?.value || '').replace(/\D/g, ''), 10) || 0; }
+function closeExpected() { return closeFloat() + (S.today ? S.today.cash : 0); }
 function closeDiff() {
   const raw = ($('#cl-cash')?.value || '').replace(/\D/g, '');
   $('#cl-go').disabled = raw === '';
   const box = $('#cl-diff'); if (!box) return;
-  const float = parseInt(($('#cl-float').value || '').replace(/\D/g, ''), 10) || 0;
-  const expected = float + S.today.cash;
-  if (raw === '') { box.className = 'change'; box.innerHTML = `<span>Expected ${rs(expected)}</span><b>—</b>`; return; }
+  const expected = closeExpected();
+  if (raw === '') { box.className = 'change'; box.innerHTML = `<span>Expected in drawer</span><b>${rs(expected)}</b>`; return; }
   const d = parseInt(raw, 10) - expected;
   box.className = 'change ' + (d < 0 ? 'short' : 'ok');
-  box.innerHTML = `<span>Expected ${rs(expected)}</span><b>${d === 0 ? 'Matches ✓' : d < 0 ? rs(-d) + ' short' : '+' + rs(d) + ' extra'}</b>`;
+  box.innerHTML = `<span>Expected ${rs(expected)}</span><b>${diffText(d)}</b>`;
 }
 async function closeDayGo() {
-  if (closeBusy) return;
+  if (dayBusy) return;
   const counted = ($('#cl-cash').value || '').replace(/\D/g, '');
   if (counted === '') return;
-  closeBusy = true; $('#cl-go').disabled = true; $('#cl-go').textContent = 'Closing…';
-  const r = await op(() => api('/api/day/close', { method: 'POST', body: { counted: +counted, float: ($('#cl-float').value || '').replace(/\D/g, ''), note: $('#cl-note').value } }));
-  closeBusy = false;
-  if (!r) { if ($('#cl-go')) { $('#cl-go').disabled = false; $('#cl-go').textContent = 'Close cafe'; } return; }
+  dayBusy = true; $('#cl-go').disabled = true;
+  const body = { counted: +counted, note: $('#cl-note').value };
+  if (!S.opening) body.float = closeFloat();
+  const r = await op(() => api('/api/day/close', { method: 'POST', body }));
+  dayBusy = false;
+  if (!r) { if ($('#cl-go')) $('#cl-go').disabled = false; return; }
   const d = r.diff;
   $('#modal').innerHTML = `<div class="overlay"><div class="sheet" role="dialog" aria-label="Cafe closed">
     <div class="done-ico">${ico('check', 34)}</div>
     <h1>Cafe closed for today</h1>
     ${r.total !== undefined ? `<div class="big">${rs(r.total)}</div>
       <div class="close-sum c3"><div><span>Cash counted</span><b>${rs(r.counted)}</b></div><div><span>UPI</span><b>${rs(r.upi)}</b></div><div><span>Bills</span><b>${r.bills}</b></div></div>
-      <div class="change ${d < 0 ? 'short' : 'ok'}"><span>Cash vs expected ${rs(r.expected)}</span><b>${d === 0 ? 'Matches ✓' : d < 0 ? rs(-d) + ' short' : '+' + rs(d) + ' extra'}</b></div>`
+      <div class="change ${d < 0 ? 'short' : 'ok'}"><span>Expected ${rs(r.expected)}</span><b>${diffText(d)}</b></div>`
     : `<p class="sub" style="margin:8px 0 16px">Cash recorded: <b style="color:var(--text)">${rs(r.counted)}</b></p>`}
     ${r.openTables ? `<p class="sub" style="color:var(--gold)">${r.openTables} table(s) were still open.</p>` : ''}
     <p class="sub" style="margin:4px 0 14px">${ico('bell', 14)} Owner’s phone notified${r.waSent ? ' · report sent on WhatsApp ✓' : ''}</p>
     ${r.waSent ? '' : `<a class="btn green block" href="${esc(r.link)}" target="_blank" rel="noopener" data-act="close-wa" style="margin-bottom:10px">${ico('send', 18)} Send report on WhatsApp</a>`}
     <div class="row"><button class="btn ghost" data-act="close-done">Done</button><button class="btn" data-act="close-lock">${ico('lock', 16)} Lock counter</button></div>
   </div></div>`;
-}
-function closedBanner() {
-  const c = S.closing; if (!c) return '';
-  const d = c.diff;
-  return `<div class="closed-banner">${ico('power', 20)}<div><b>Closed today at ${timeStr(new Date(c.at))}</b> by ${c.by} · cash ${rs(c.counted)}${d === undefined ? '' : ` · ${d === 0 ? 'matches ✓' : d < 0 ? `<span style="color:var(--red)">${rs(-d)} short</span>` : `${rs(d)} extra`}`}</div></div>`;
 }
 
 const ico = (name, size = 22) => `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -574,9 +616,9 @@ function viewTables() {
     <div class="page-head">
       <div><h1>Tables</h1><div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
       <div class="head-r"><div class="legend"><span><i></i>Free</span><span><i class="busy"></i>Occupied</span><span><i class="ping"></i>New QR order</span><span><i class="late"></i>Open ${LATE_MIN}+ min</span></div>
-      <button class="btn close-btn" data-act="close-day">${ico('power', 18)} Close cafe</button></div>
+      ${dayButton()}</div>
     </div>
-    ${closedBanner()}
+    ${dayBanner()}
     ${pushBanner()}
     ${kpis}
     ${incoming}
@@ -938,6 +980,8 @@ document.addEventListener('click', async e => {
     case 'stk-in-save': { const qty = stockInTotal(); if (!qty) return; const bill = $('#stk-bill').value.trim(); return stockSave(`/api/stock/${el.dataset.id}/in`, { qty, billAmount: bill === '' ? null : bill, supplier: $('#stk-supplier').value }, r => `Added ${qty} · now ${r.stock} in stock`); }
     case 'stk-count-save': { const actual = ($('#stk-actual').value || '').replace(/\D/g, ''); if (actual === '') return; return stockSave(`/api/stock/${el.dataset.id}/count`, { actual: +actual }, r => r.diff === null ? 'Count saved' : r.diff === 0 ? 'Count matches ✓' : r.diff < 0 ? `Count saved · ${-r.diff} missing` : `Count saved · ${r.diff} extra`); }
     case 'stk-remove-save': { const qty = numIn('stk-rm'); if (!qty) return toast('Enter how many'); const reason = $('#stk-reason .on')?.dataset.r || 'other'; return stockSave(`/api/stock/${el.dataset.id}/remove`, { qty, reason }, r => `Removed ${qty} · now ${r.stock} in stock`); }
+    case 'open-day': return openOpenDay();
+    case 'open-day-go': return openDayGo();
     case 'close-day': return openCloseDay();
     case 'close-day-go': return closeDayGo();
     case 'close-done': closeModal(); return render();
@@ -974,8 +1018,10 @@ document.addEventListener('input', e => {
   else if (['stk-packs', 'stk-loose', 'stk-bill'].includes(e.target.id)) stockInTotal();
   else if (e.target.id === 'stk-actual') countDiff();
   else if (e.target.id === 'cl-cash' || e.target.id === 'cl-float') closeDiff();
+  else if (e.target.id === 'op-cash') $('#op-go').disabled = !e.target.value.replace(/\D/g, '');
 });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && ['stk-actual', 'stk-loose', 'stk-packs', 'stk-supplier', 'stk-bill', 'stk-rm'].includes(e.target.id)) { const b = $('#stk-save') || $('[data-act=stk-remove-save]'); if (b && !b.disabled) b.click(); }
+  if (e.key === 'Enter' && e.target.id === 'op-cash' && !$('#op-go').disabled) $('#op-go').click();
   if (e.key === 'Enter' && e.target.id === 'cl-cash' && !$('#cl-go').disabled) $('#cl-go').click();
   if (e.key === 'Enter' && e.target.id === 'cash' && !$('#cash-done').disabled) $('#cash-done').click(); if (e.key === 'Escape' && $('#modal').innerHTML) closeModal(); });
 document.addEventListener('change', async e => {

@@ -3,7 +3,7 @@ const crypto = require('node:crypto');
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const { CATS, DEFAULT_ITEMS } = require('./menu');
-const { dayKey, hourOf } = require('./time');
+const { dayKey, hourOf, timeLabel } = require('./time');
 const { summarize, reportText } = require('./report');
 const { sendWhatsApp, whatsappConfigured } = require('./whatsapp');
 const { notifyOwners, pushConfigured } = require('./push');
@@ -34,6 +34,7 @@ async function setup() {
   await col('orders').createIndex({ at: 1 });
   await col('order_log').createIndex({ day: 1 });
   await col('closings').createIndex({ day: 1, at: -1 });
+  await col('openings').createIndex({ day: 1, at: -1 });
   if (!(await col('items').countDocuments())) await col('items').insertMany(DEFAULT_ITEMS);
   await stockApi.migrate();
   await col('stock_moves').createIndex({ item: 1, at: -1 });
@@ -172,7 +173,8 @@ app.get('/api/state', auth, wrap(async (req, res) => {
   const [items, tables, orders] = await Promise.all([getItems(), col('tables').find().toArray(), col('orders').find().sort({ at: 1 }).toArray()]);
   const settings = { upi: st.upi, wa: st.wa, lastReport: st.lastReport, waAuto: whatsappConfigured(), lastFloat: st.lastFloat || 0 };
   // Today's closing, if the cafe was closed (difference only for the owner: staff count "blind").
-  const c = await latestClosing(dayKey());
+  const [c, o] = await Promise.all([latestClosing(dayKey()), latestOpening(dayKey())]);
+  const opening = o ? { at: o.at, float: o.float, by: o.by } : null;
   const closing = c ? { at: c.at, counted: c.counted, by: c.by, ...(req.role === 'owner' ? { diff: c.diff, expected: c.expected } : {}) } : null;
   if (req.role === 'owner') Object.assign(settings, { ownerPin: st.ownerPin, staffPin: st.staffPin });
   // Today's takings, owner only (staff don't see revenue).
@@ -187,6 +189,7 @@ app.get('/api/state', auth, wrap(async (req, res) => {
     reportHour: REPORT_HOUR,
     rev: st.rev || 0,
     today,
+    opening,
     closing,
     cats: CATS,
     items: items.map(itemOut),
@@ -279,11 +282,25 @@ app.post('/api/orders/:id/reject', auth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ---------------- open the cafe in the morning ---------------- */
+app.post('/api/day/open', auth, wrap(async (req, res) => {
+  const float = Math.round(Number(req.body?.float));
+  if (!(float >= 0 && float <= 1000000)) return bad(res, 'Enter the cash in the drawer');
+  const day = dayKey(), now = Date.now();
+  await col('openings').insertOne({ day, float, by: req.role, at: now });
+  await col('settings').updateOne({ _id: 'cafe' }, { $set: { lastFloat: float } });
+  await broadcast();
+  await notifyOwners(col, { title: `☀️ Cafe opened · ${timeLabel(new Date(now))}`, body: `Opening cash in drawer: ${rs(float)} (by ${req.role})`, url: '/#/', tag: 'opened-' + day });
+  res.json({ ok: true, float, at: now });
+}));
+
 /* ---------------- close the cafe for the day ---------------- */
 // Count the cash, record it, send the day report to the owner (phone + WhatsApp).
 app.post('/api/day/close', auth, wrap(async (req, res) => {
   const counted = Math.round(Number(req.body?.counted));
-  const float = req.body?.float === '' || req.body?.float == null ? 0 : Math.round(Number(req.body.float));
+  // Opening cash comes from Open cafe this morning; if the cafe wasn't opened in the app, the screen asks for it.
+  const opened = await latestOpening(dayKey());
+  const float = opened ? opened.float : req.body?.float === '' || req.body?.float == null ? 0 : Math.round(Number(req.body.float));
   if (!(counted >= 0 && counted <= 10000000)) return bad(res, 'Enter the cash in the drawer');
   if (!(float >= 0 && float <= 1000000)) return bad(res, 'Bad opening cash');
   const note = String(req.body?.note || '').trim().slice(0, 200);
@@ -291,7 +308,7 @@ app.post('/api/day/close', auth, wrap(async (req, res) => {
   const sales = await col('sales').find({ day }).toArray();
   const sum = summarize(sales);
   const expected = float + sum.cash;
-  const closing = { day, counted, float, expected, diff: counted - expected, note, by: req.role, at: Date.now(), total: sum.total, upi: sum.upi, cash: sum.cash, bills: sum.bills };
+  const closing = { day, counted, float, expected, diff: counted - expected, note, by: req.role, at: Date.now(), openedAt: opened?.at || null, openedBy: opened?.by || null, total: sum.total, upi: sum.upi, cash: sum.cash, bills: sum.bills };
   await col('closings').insertOne(closing);
   await col('settings').updateOne({ _id: 'cafe' }, { $set: { lastReport: day, lastFloat: float } });
   await broadcast();
@@ -335,6 +352,7 @@ app.post('/api/push/test', auth, ownerOnly, wrap(async (req, res) => {
 }));
 
 /* ---------------- owner: report ---------------- */
+const latestOpening = (day) => col('openings').find({ day }).sort({ at: -1 }).limit(1).next();
 const latestClosing = (day) => col('closings').find({ day }).sort({ at: -1 }).limit(1).next();
 async function buildReport(day) {
   const [sales, open] = await Promise.all([col('sales').find({ day }).toArray(), col('tables').countDocuments()]);
@@ -417,7 +435,7 @@ app.post('/api/demo/seed', auth, ownerOnly, wrap(async (req, res) => {
 }));
 
 app.post('/api/reset', auth, ownerOnly, wrap(async (req, res) => {
-  await Promise.all([col('sales').deleteMany({}), col('tables').deleteMany({}), col('orders').deleteMany({}), col('order_log').deleteMany({}), col('closings').deleteMany({})]);
+  await Promise.all([col('sales').deleteMany({}), col('tables').deleteMany({}), col('orders').deleteMany({}), col('order_log').deleteMany({}), col('closings').deleteMany({}), col('openings').deleteMany({})]);
   await broadcast();
   res.json({ ok: true });
 }));

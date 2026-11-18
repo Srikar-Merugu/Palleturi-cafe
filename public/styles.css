@@ -467,3 +467,38 @@ table.list tr.cat td { color: var(--gold); font-weight: 700; padding-top: 16px; 
 .done-ico { width: 64px; height: 64px; margin: 0 auto 10px; border-radius: 50%; display: grid; place-items: center; background: rgba(76,195,138,.16); color: var(--green); }
 .sheet p .i { display: inline-block; vertical-align: -2px; }
 @media (max-width: 520px) { .close-sum { grid-template-columns: repeat(2, 1fr); } .close-sum.c3 { grid-template-columns: repeat(3, 1fr); } .head-r .legend { display: none; } }
+
+/* ---------- Open / close day (v2) ---------- */
+.day-head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.day-head > .i { width: 50px; height: 50px; padding: 12px; border-radius: 14px; background: var(--board); color: var(--cream); flex: none; }
+.day-head.sun > .i { background: var(--gold); color: var(--gold-ink); }
+.big-label { display: block; font-weight: 700; font-size: 15px; margin: 4px 0 8px; }
+/* One clean money box: ₹ + number, single border (no box-in-box) */
+.sheet .money { display: flex; align-items: center; gap: 10px; padding: 0 16px; margin-bottom: 12px; border-radius: 14px; background: var(--bg); border: 1.5px solid var(--line-2); transition: border-color .15s, box-shadow .15s; }
+.sheet .money:focus-within { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(245,169,27,.15); }
+.sheet .money span { font-size: 26px; font-weight: 700; color: var(--muted); }
+.sheet .money input { flex: 1; min-width: 0; width: 100%; padding: 14px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; color: var(--text); font-size: 32px; font-weight: 800; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.sheet .money input::placeholder { color: var(--faint); }
+.sheet .money.sm span { font-size: 18px; }
+.sheet .money.sm input { font-size: 20px; padding: 10px 0; }
+.sheet .field label small { color: var(--faint); font-weight: 400; }
+.hint { color: var(--muted); font-size: 13px; margin: -2px 0 18px; }
+.kv { display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin-bottom: 16px; border-radius: 12px; background: var(--s2); font-size: 14px; }
+.kv > .i { color: var(--gold); }
+.kv span { color: var(--muted); }
+.kv b { margin-left: auto; font-size: 17px; font-variant-numeric: tabular-nums; }
+.kv small { color: var(--faint); font-size: 12px; }
+.sheet .change { margin-bottom: 16px; }
+.sheet .change span { font-size: 14px; }
+.sheet .change b { font-size: 24px; }
+/* Day banners on Tables */
+.day-banner { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding: 12px 16px; border-radius: var(--radius); font-size: 14px; color: var(--muted); }
+.day-banner b { color: var(--text); }
+.day-banner .neg { color: var(--red); font-weight: 600; }
+.day-banner.open { background: var(--s1); border: 1px solid var(--line); }
+.day-banner.open > .i { color: var(--gold); }
+.day-banner.closed { background: var(--s1); border: 1px dashed var(--line-2); }
+.day-banner.start { padding: 16px 18px; background: linear-gradient(135deg, rgba(245,169,27,.18), rgba(245,169,27,.05)); border: 1px solid rgba(245,169,27,.55); }
+.day-banner.start > .i { color: var(--gold); }
+.day-banner.start .txt { flex: 1; }
+.day-banner.start b { font-size: 15.5px; }

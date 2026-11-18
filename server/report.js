@@ -51,6 +51,7 @@ function reportText(r, day, openTables, low = [], closing = null) {
     const d = closing.diff;
     out.push(`Cash in drawer: ${rs(closing.counted)} ${d === 0 ? '✅ matches' : d < 0 ? `❗ ${rs(-d)} short` : `➕ ${rs(d)} extra`}`);
     out.push(`Expected: ${rs(closing.expected)}${closing.float ? ` (opening ${rs(closing.float)} + cash sales ${rs(r.cash)})` : ''}`);
+    if (closing.openedAt) out.push(`☀️ Opened at ${timeLabel(new Date(closing.openedAt))} by ${closing.openedBy} with ${rs(closing.float)}`);
     if (closing.note) out.push(`Note: ${closing.note}`);
     out.push(`🔒 Closed at ${timeLabel(new Date(closing.at))} by ${closing.by}`);
   }
