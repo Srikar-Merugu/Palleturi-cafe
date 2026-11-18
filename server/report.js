@@ -7,7 +7,7 @@ const hourLabel = (h) => `${h % 12 || 12} ${h >= 12 ? 'PM' : 'AM'}`;
 function summarize(sales) {
   const byItem = {};
   const byHour = Array(24).fill(0);
-  let total = 0, upi = 0, cash = 0;
+  let total = 0, upi = 0, cash = 0, profit = 0, costed = false;
   for (const s of sales) {
     total += s.total;
     if (s.method === 'UPI') upi += s.total; else cash += s.total;
@@ -17,6 +17,7 @@ function summarize(sales) {
       const r = byItem[k] || (byItem[k] = { name: l.name, cat: l.cat, qty: 0, amt: 0 });
       r.qty += l.qty;
       r.amt += l.qty * l.price;
+      if (typeof l.cost === 'number') { profit += (l.price - l.cost) * l.qty; costed = true; }
     }
   }
   const groups = CATS
@@ -26,10 +27,11 @@ function summarize(sales) {
     })
     .filter((g) => g.rows.length);
   const peak = total ? byHour.indexOf(Math.max(...byHour)) : null;
-  return { total, upi, cash, bills: sales.length, groups, byHour, peak };
+  // Profit only counts items that have a buying price set in Stock.
+  return { total, upi, cash, bills: sales.length, groups, byHour, peak, profit: costed ? Math.round(profit) : null };
 }
 
-function reportText(r, day, openTables) {
+function reportText(r, day, openTables, low = []) {
   const out = ['☕ *Palleturi Cafe — Daily Report*', `📅 ${dayLabel(day)}`, ''];
   for (const g of r.groups) {
     out.push(`*${g.name}* (${g.qty})`);
@@ -41,8 +43,13 @@ function reportText(r, day, openTables) {
   out.push(`🧾 Bills: ${r.bills}`);
   out.push(`💰 *Total: ${rs(r.total)}*`);
   out.push(`📱 UPI: ${rs(r.upi)}  ·  💵 Cash: ${rs(r.cash)}`);
+  if (r.profit !== null) out.push(`📈 Profit: ${rs(r.profit)} (items with buying price)`);
   if (r.peak !== null) out.push(`⏰ Busiest hour: ${hourLabel(r.peak)} – ${hourLabel((r.peak + 1) % 24)}`);
   if (openTables) out.push(`⚠️ ${openTables} table(s) still not settled`);
+  if (low.length) {
+    out.push('', '📦 *Low stock*');
+    for (const i of low) out.push(`• ${i.name}: ${i.stock <= 0 ? 'OUT' : `${i.stock} ${i.unit} left`}`);
+  }
   return out.join('\n');
 }
 

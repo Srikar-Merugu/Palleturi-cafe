@@ -40,6 +40,8 @@ const ICONS = {
   back: '<path d="m14.5 18-6-6 6-6"/>',
   send: '<path d="M21 3 10 14"/><path d="M21 3 14.5 21l-4.5-7-7-4.5L21 3z"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  box: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5v-9z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
   cup: '<path d="M4 9.5h12V14a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9.5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 3.5c-.8.9.8 1.6 0 2.5M12 3.5c-.8.9.8 1.6 0 2.5"/>',
   samosa: '<path d="M12 4 3.5 19h17L12 4z"/><path d="M8.5 15h7M10 11.5h4"/>',
   bottle: '<path d="M10 2.5h4V5l1.6 2.6V20a1.8 1.8 0 0 1-1.8 1.8h-3.6A1.8 1.8 0 0 1 8.4 20V7.6L10 5V2.5z"/><path d="M8.4 12h7.2M8.4 16h7.2"/>',
@@ -110,6 +112,178 @@ function pushBanner() {
     <button class="x" data-act="push-hide" aria-label="Hide">×</button></div>`;
 }
 
+
+/* ---------------- stock (owner) ---------------- */
+let STK = null, stockTab = 'items', stockFilter = 'all', stockQ = '', stkItem = null, stkMoves = null;
+const STATUS_LABEL = { ok: 'In stock', low: 'Low', out: 'Out', unset: 'Not counted', untracked: 'Not tracked' };
+const MOVE_LABEL = { in: 'Added', sale: 'Sold', count: 'Counted', remove: 'Removed' };
+const fmtQty = (n, unit) => `${n} ${unit}`;
+const agoDays = ts => { if (!ts) return 'never'; const d = Math.floor((Date.now() - ts) / 86400000); return d <= 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago'; };
+const whenStr = ts => { const d = new Date(ts); return dayKey(d) === dayKey() ? timeStr(d) : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ', ' + timeStr(d); };
+async function loadStock() { try { STK = await api('/api/stock'); if (stkItem) stkItem = STK.items.find(i => i.id === stkItem.id) || null; } catch (e) { toast(e.message); } }
+
+function viewStock() {
+  if (!STK) return `<div class="page-head"><h1>Stock</h1></div><p class="sub">Loading…</p>`;
+  const tracked = STK.items.filter(i => i.track);
+  const n = s => tracked.filter(i => i.status === s).length;
+  const value = tracked.reduce((a, i) => a + (i.cost && i.stock > 0 ? i.cost * i.stock : 0), 0);
+  const q = stockQ.trim().toLowerCase();
+  const list = STK.items.filter(i => (stockFilter === 'all' ? i.track : stockFilter === 'untracked' ? !i.track : i.track && i.status === stockFilter) && (!q || i.name.toLowerCase().includes(q)));
+  const chip = (id, label, count) => `<button data-act="stk-filter" data-f="${id}" class="${stockFilter === id ? 'on' : ''}">${label}${count ? `<span class="cnt">${count}</span>` : ''}</button>`;
+  const head = `
+    <div class="page-head">
+      <div><h1>Stock</h1><div class="sub">Packaged items: cigarettes, cool drinks, biscuits, cookies…</div></div>
+      <div class="seg">
+        <button data-act="stk-tab" data-tab="items" class="${stockTab === 'items' ? 'on' : ''}">Items</button>
+        <button data-act="stk-tab" data-tab="history" class="${stockTab === 'history' ? 'on' : ''}">History</button>
+      </div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="ico">${ico('box')}</div><div><div class="k">Items tracked</div><b>${tracked.length}</b></div></div>
+      <div class="kpi ${n('low') ? 'hot' : ''}"><div class="ico">${ico('bell')}</div><div><div class="k">Running low</div><b>${n('low')}</b></div></div>
+      <div class="kpi ${n('out') ? 'danger' : ''}"><div class="ico">${ico('box')}</div><div><div class="k">Out of stock</div><b>${n('out')}</b></div></div>
+      <div class="kpi brand"><div class="ico">${ico('cash')}</div><div><div class="k">Stock value (buying price)</div><b>${value ? rs(Math.round(value)) : '—'}</b></div></div>
+    </div>`;
+  if (stockTab === 'history') {
+    return head + `<div class="panel">${STK.moves.length ? `<div class="moves">${STK.moves.map(moveRow).join('')}</div>` : `<p class="sub">No stock changes yet. Add your first delivery from the Items tab.</p>`}</div>`;
+  }
+  return head + `
+    ${n('unset') ? `<div class="alert-banner">${ico('box', 22)}<div class="txt"><b>${n('unset')} item${n('unset') === 1 ? '' : 's'} not counted yet</b><div class="sub">Count what’s on the shelf once (tap <b>Count</b>), or add the next delivery. Until then they always show as available.</div></div></div>` : ''}
+    <div class="stk-bar">
+      <div class="cats">${chip('all', 'All tracked')}${chip('low', 'Low', n('low'))}${chip('out', 'Out', n('out'))}${chip('unset', 'Not counted', n('unset'))}${chip('untracked', 'Not tracked')}</div>
+      <label class="search">${ico('search', 18)}<input id="stk-search" type="search" placeholder="Search stock…" value="${esc(stockQ)}" autocomplete="off" aria-label="Search stock"></label>
+    </div>
+    <div class="stk-list" id="stk-list">${stockRows(list)}</div>`;
+}
+function stockRows(list) {
+  if (!list.length) return `<div class="panel sub" style="text-align:center">Nothing here.</div>`;
+  return list.map(i => `
+    <div class="srow st-${i.status} cat-${esc(i.cat)}">
+      <span class="ic">${ico(CAT_ICON[i.cat] || 'box', 20)}</span>
+      <button class="nm" data-act="stk-open" data-id="${i.id}"><b>${esc(i.name)}</b><span class="meta">${i.track ? `Last added ${agoDays(i.lastIn)}${i.cost ? ` · buys at ${rs(i.cost)}` : ''}` : 'Not tracked'}</span></button>
+      ${i.track ? `<div class="qty">${i.stock === null ? '<span class="sub">—</span>' : `<b>${i.stock}</b> <span>${esc(i.unit)}</span>`}</div><span class="chip">${STATUS_LABEL[i.status]}</span>` : '<div class="qty"></div><span></span>'}
+      <div class="acts">${i.track
+        ? `<button class="btn small gold" data-act="stk-in" data-id="${i.id}">${ico('plus', 16)} Add</button><button class="btn small ghost" data-act="stk-count" data-id="${i.id}">Count</button>`
+        : `<button class="btn small ghost" data-act="stk-track" data-id="${i.id}" data-on="1">Start tracking</button>`}</div>
+    </div>`).join('');
+}
+function moveRow(m) {
+  const sign = m.qty > 0 ? '+' : '';
+  const detail = m.type === 'in' ? [m.supplier && `from ${esc(m.supplier)}`, m.bill ? `bill ${rs(m.bill)}` : ''].filter(Boolean).join(' · ')
+    : m.type === 'count' ? (m.expected === null ? 'first count' : m.qty === 0 ? 'matched' : m.qty < 0 ? `${-m.qty} missing (expected ${m.expected})` : `${m.qty} extra (expected ${m.expected})`)
+    : m.type === 'remove' ? esc(m.reason || '') : m.type === 'sale' ? 'paid bill' : '';
+  return `<div class="mrow mv-${m.type}${m.type === 'count' && m.qty < 0 ? ' miss' : ''}">
+    <span class="mt">${MOVE_LABEL[m.type] || m.type}</span>
+    <div class="mn"><b>${esc(m.name)}</b><span class="meta">${whenStr(m.at)}${detail ? ' · ' + detail : ''}${m.by ? ' · ' + m.by : ''}</span></div>
+    <span class="mq">${m.type === 'count' && m.expected === null ? m.qty : sign + m.qty}</span>
+    <span class="ma">→ ${m.after}</span>
+  </div>`;
+}
+
+/* pop-ups */
+function stkFind(id) { return STK && STK.items.find(i => i.id === id); }
+function openStockIn(id) {
+  const it = stkFind(id); if (!it) return;
+  const pack = it.packSize > 0;
+  $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left" role="dialog" aria-label="Add stock">
+    <h1>Add stock</h1><div class="sub" style="margin-bottom:16px">${esc(it.name)} · now ${it.stock === null ? 'not counted' : fmtQty(it.stock, esc(it.unit))}</div>
+    <div class="grid2">
+      ${pack ? `<div class="field"><label for="stk-packs">${esc(cap(it.packName || 'pack'))}s (${it.packSize} each)</label><input id="stk-packs" inputmode="numeric" placeholder="0"></div>` : ''}
+      <div class="field"><label for="stk-loose">${pack ? 'Loose ' : ''}${esc(it.unit)}</label><input id="stk-loose" inputmode="numeric" placeholder="0"></div>
+    </div>
+    <div class="change ok" id="stk-total"><span>Adding</span><b>0 ${esc(it.unit)}</b></div>
+    <div class="grid2">
+      <div class="field"><label for="stk-bill">Amount paid (optional)</label><input id="stk-bill" inputmode="decimal" placeholder="₹ total for this delivery"></div>
+      <div class="field"><label for="stk-supplier">Supplier (optional)</label><input id="stk-supplier" placeholder="e.g. Ravi Agencies" maxlength="60"></div>
+    </div>
+    <p class="sub" id="stk-costline" style="margin:-4px 0 14px">${it.cost ? `Last buying price: ${rs(it.cost)} per ${esc(singular(it.unit))}` : 'Add the amount paid to see profit in the daily report.'}</p>
+    <div class="row"><button class="btn ghost" data-act="close-modal">Cancel</button><button class="btn gold" id="stk-save" data-act="stk-in-save" data-id="${id}" disabled>Add to stock</button></div>
+  </div></div>`;
+  ($('#stk-packs') || $('#stk-loose')).focus();
+}
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const singular = u => u.replace(/s$/, '');
+const numIn = id => parseInt(($('#' + id)?.value || '').replace(/\D/g, ''), 10) || 0;
+function stockInTotal() {
+  const it = stkFind($('#stk-save')?.dataset.id); if (!it) return 0;
+  const total = numIn('stk-packs') * (it.packSize || 0) + numIn('stk-loose');
+  const after = (it.stock || 0) + total;
+  $('#stk-total').innerHTML = `<span>Adding</span><b>${total} ${esc(it.unit)}${total ? ` <small class="sub">→ ${after} in stock</small>` : ''}</b>`;
+  $('#stk-save').disabled = !total;
+  const bill = parseFloat($('#stk-bill')?.value || '');
+  if (total && bill > 0) $('#stk-costline').textContent = `Buying price: ${rs(Math.round(bill / total * 100) / 100)} per ${singular(it.unit)} · sells at ${rs(it.price)}`;
+  return total;
+}
+function openCount(id) {
+  const it = stkFind(id); if (!it) return;
+  $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left" role="dialog" aria-label="Count stock">
+    <h1>Count stock</h1><div class="sub" style="margin-bottom:16px">${esc(it.name)} · count what’s on the shelf right now</div>
+    <div class="grid2">
+      <div class="field"><label>App expects</label><div class="ipt ro">${it.stock === null ? 'not counted yet' : fmtQty(it.stock, esc(it.unit))}</div></div>
+      <div class="field"><label for="stk-actual">Actually on shelf</label><input id="stk-actual" inputmode="numeric" placeholder="0"></div>
+    </div>
+    <div class="change" id="stk-diff"><span>Difference</span><b>—</b></div>
+    <div class="row"><button class="btn ghost" data-act="close-modal">Cancel</button><button class="btn gold" id="stk-save" data-act="stk-count-save" data-id="${id}" disabled>Save count</button></div>
+  </div></div>`;
+  $('#stk-actual').focus();
+}
+function countDiff() {
+  const it = stkFind($('#stk-save')?.dataset.id); if (!it) return;
+  const raw = ($('#stk-actual').value || '').replace(/\D/g, ''), box = $('#stk-diff');
+  $('#stk-save').disabled = raw === '';
+  if (raw === '' || it.stock === null) { box.className = 'change'; box.innerHTML = `<span>Difference</span><b>—</b>`; return; }
+  const d = parseInt(raw, 10) - it.stock;
+  box.className = 'change ' + (d < 0 ? 'short' : 'ok');
+  box.innerHTML = d === 0 ? `<span>Matches</span><b>✓</b>` : d < 0 ? `<span>Missing</span><b>${-d} ${esc(it.unit)}</b>` : `<span>Extra</span><b>+${d} ${esc(it.unit)}</b>`;
+}
+async function openStockItem(id) {
+  stkItem = stkFind(id); if (!stkItem) return;
+  stkMoves = null; renderStockItem();
+  try { stkMoves = (await api(`/api/stock/${id}/moves`)).moves; } catch (e) { stkMoves = []; }
+  if (stkItem && stkItem.id === id && $('#stk-sheet')) renderStockItem();
+}
+function renderStockItem() {
+  const it = stkItem;
+  $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left wide" id="stk-sheet" role="dialog" aria-label="${esc(it.name)} stock">
+    <div class="stk-top st-${it.status}">
+      <div><h1>${esc(it.name)}</h1><span class="chip">${STATUS_LABEL[it.status]}</span></div>
+      <div class="big">${it.stock === null ? '—' : it.stock}<small> ${esc(it.unit)}</small></div>
+    </div>
+    <div class="row" style="margin:14px 0 18px">
+      <button class="btn gold" data-act="stk-in" data-id="${it.id}">${ico('plus', 16)} Add stock</button>
+      <button class="btn" data-act="stk-count" data-id="${it.id}">Count</button>
+      <button class="btn ghost" data-act="stk-remove" data-id="${it.id}">Remove</button>
+    </div>
+    <h2>Settings</h2>
+    <div class="grid2">
+      <div class="field"><label for="ss-low">Alert me when below</label><input id="ss-low" data-stkset="lowAt" inputmode="numeric" value="${it.lowAt}"></div>
+      <div class="field"><label for="ss-unit">Unit</label><input id="ss-unit" data-stkset="unit" value="${esc(it.unit)}" maxlength="20"></div>
+      <div class="field"><label for="ss-pack">Pack name</label><input id="ss-pack" data-stkset="packName" value="${esc(it.packName)}" placeholder="crate, box…" maxlength="20"></div>
+      <div class="field"><label for="ss-size">${esc(it.unit)} per pack</label><input id="ss-size" data-stkset="packSize" inputmode="numeric" value="${it.packSize || ''}" placeholder="0 = no packs"></div>
+      <div class="field"><label for="ss-cost">Buying price per ${esc(singular(it.unit))} (₹)</label><input id="ss-cost" data-stkset="cost" inputmode="decimal" value="${it.cost ?? ''}" placeholder="for profit"></div>
+      <div class="field"><label>Tracking</label><button class="btn ghost" data-act="stk-track" data-id="${it.id}" data-on="0">Stop tracking</button></div>
+    </div>
+    <h2 style="margin-top:8px">Recent changes</h2>
+    ${stkMoves === null ? '<p class="sub">Loading…</p>' : stkMoves.length ? `<div class="moves">${stkMoves.map(moveRow).join('')}</div>` : '<p class="sub">No changes yet.</p>'}
+    <button class="btn ghost block" data-act="close-modal" style="margin-top:16px">Close</button>
+  </div></div>`;
+}
+function openRemove(id) {
+  const it = stkFind(id); if (!it) return;
+  $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left" role="dialog" aria-label="Remove stock">
+    <h1>Remove stock</h1><div class="sub" style="margin-bottom:16px">${esc(it.name)} · damaged, expired or used by staff</div>
+    <div class="field"><label for="stk-rm">How many ${esc(it.unit)}</label><input id="stk-rm" inputmode="numeric" placeholder="0"></div>
+    <div class="field"><label>Reason</label><div class="cats" id="stk-reason">${['damaged', 'expired', 'own use', 'other'].map((r, i) => `<button data-act="stk-reason" data-r="${r}" class="${i === 0 ? 'on' : ''}">${cap(r)}</button>`).join('')}</div></div>
+    <div class="row"><button class="btn ghost" data-act="close-modal">Cancel</button><button class="btn gold" data-act="stk-remove-save" data-id="${id}">Remove</button></div>
+  </div></div>`;
+  $('#stk-rm').focus();
+}
+async function stockSave(path, body, msg) {
+  const r = await op(() => api(path, { method: 'POST', body }));
+  if (!r) return;
+  closeModal(); toast(msg(r)); await loadStock(); render();
+}
+
 const ico = (name, size = 22) => `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
 function toast(msg) {
@@ -169,6 +343,7 @@ async function refresh() {
     const fresh = before ? S.pending.filter(o => !before.has(o.id) && !handled.has(o.id)) : [];
     if (fresh.length) { beep(); fresh.forEach(o => toast(`New order from ${tname(o.table)}`)); }
     if (parts()[0] === 'report' && role === 'owner') R = await api('/api/report');
+    if (parts()[0] === 'stock' && role === 'owner') await loadStock();
     if (!$('#modal').innerHTML) render();
   } catch (e) { if (token) toast(e.message); }
   refreshing = false;
@@ -202,6 +377,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && to
 function parts() { return (location.hash.slice(1) || '/').split('/').filter(Boolean); }
 window.addEventListener('hashchange', () => {
   window.scrollTo(0, 0); posQ = '';
+  if (parts()[0] === 'stock' && role === 'owner') loadStock().then(render);
   if (parts()[0] === 'report' && role === 'owner') { R = null; api('/api/report').then(r => { R = r; render(); }).catch(e => toast(e.message)); }
   render();
 });
@@ -213,12 +389,13 @@ function render() {
   if (!S) { $('#app').innerHTML = `<div class="login"><div class="sub">Loading…</div></div>`; return; }
   if (p[0] === 'table') return shell(viewTable(p[1]), 'tables');
   if (p[0] === 'report' && role === 'owner') return shell(viewReport(), 'report');
+  if (p[0] === 'stock' && role === 'owner') return shell(viewStock(), 'stock');
   if (p[0] === 'qr' && role === 'owner') return shell(viewQR(), 'qr', true);
   if (p[0] === 'settings' && role === 'owner') return shell(viewSettings(), 'settings');
   return shell(viewTables(), 'tables');
 }
 
-const NAV = [['', 'tables', 'Tables', 'grid'], ['report', 'report', 'Report', 'chart'], ['qr', 'qr', 'QR codes', 'qr'], ['settings', 'settings', 'Settings', 'sliders']];
+const NAV = [['', 'tables', 'Tables', 'grid'], ['stock', 'stock', 'Stock', 'box'], ['report', 'report', 'Report', 'chart'], ['qr', 'qr', 'QR codes', 'qr'], ['settings', 'settings', 'Settings', 'sliders']];
 function shell(html, active, qr) {
   const n = S.pending.length;
   const act = document.activeElement, focusId = act && act.id, caret = act && act.selectionStart;
@@ -341,12 +518,15 @@ function itemsHTML(t) {
   const q = posQ.trim().toLowerCase();
   const list = q ? S.items.filter(i => i.name.toLowerCase().includes(q) || (i.te || '').includes(posQ.trim())) : S.items.filter(i => i.cat === posCat);
   if (!list.length) return `<div class="none">No items match “${esc(posQ)}”</div>`;
+  const reserved = id => Object.values(S.tables).reduce((a, tb) => a + ((tb.lines || {})[id] || 0), 0);
   return list.map(i => {
     const n = lines[i.id] || 0;
+    const left = i.track && i.stock !== null ? i.stock - reserved(i.id) : null;
+    const stk = left === null ? '' : `<span class="stk ${left <= 0 ? 'out' : left <= i.lowAt ? 'low' : ''}">${left <= 0 ? 'Out of stock' : left + ' left'}</span>`;
     return `<div class="item cat-${esc(i.cat)} ${n ? 'sel' : ''} ${bumpId === i.id ? 'bump' : ''}">
       <button class="item-add" data-act="add" data-t="${t}" data-id="${i.id}" aria-label="Add ${esc(i.name)}${n ? `, ${n} on bill` : ''}">
         <span class="ic">${ico(CAT_ICON[i.cat] || 'cup', 20)}</span>
-        <span class="nm">${esc(i.name)}</span>
+        <span class="nm">${esc(i.name)}${stk}</span>
         <span class="foot"><span class="pr">${rs(i.price)}</span>${n ? `<span class="q">× ${n}</span>` : ''}</span>
       </button>
       ${n ? `<button class="item-minus" data-act="dec" data-t="${t}" data-id="${i.id}" aria-label="Remove one ${esc(i.name)}">−</button>` : ''}
@@ -553,7 +733,7 @@ function viewReport() {
       <h1>Today’s report</h1><div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
     </div>
     <div class="stats">
-      <div class="stat hero"><div class="k">Total sales</div><div class="v">${rs(r.total)}</div></div>
+      <div class="stat hero"><div class="k">Total sales</div><div class="v">${rs(r.total)}</div>${r.profit !== null ? `<div class="k" style="margin-top:4px">Profit ${rs(r.profit)}</div>` : ''}</div>
       <div class="stat"><div class="k">Bills</div><div class="v">${r.bills}</div></div>
       <div class="stat"><div class="k">UPI</div><div class="v">${rs(r.upi)}</div></div>
       <div class="stat"><div class="k">Cash</div><div class="v">${rs(r.cash)}</div></div>
@@ -564,6 +744,7 @@ function viewReport() {
         ${r.groups.length ? `<table class="list">${r.groups.map(g => `<tr class="cat"><td>${g.name}</td><td class="r">${g.qty}</td><td></td></tr>
           ${g.rows.map(x => `<tr><td>${esc(x.name)}</td><td class="r">× ${x.qty}</td><td class="r">${rs(x.amt)}</td></tr>`).join('')}`).join('')}</table>`
         : `<p class="sub">No bills settled yet today. In Settings you can load a demo day to see how this looks.</p>`}
+        ${r.low && r.low.length ? `<h2 style="margin-top:22px">Low stock</h2><table class="list">${r.low.map(x => `<tr><td>${esc(x.name)}</td><td class="r" style="color:${x.stock <= 0 ? 'var(--red)' : 'var(--gold)'}">${x.stock <= 0 ? 'Out' : x.stock + ' ' + esc(x.unit) + ' left'}</td></tr>`).join('')}</table>` : ''}
         <h2 style="margin-top:22px">Sales by hour</h2>
         <div class="bars">${hours.map(h => `<div class="${h === r.peak ? 'top1' : ''}" style="height:${(r.byHour[h] / max) * 100}%" title="${hourLabel(h)}: ${rs(r.byHour[h])}"></div>`).join('')}</div>
         <div class="bars-x">${hours.map(h => `<span>${h % 3 === 2 ? hourLabel(h).replace(' ', '') : ''}</span>`).join('')}</div>
@@ -674,6 +855,17 @@ document.addEventListener('click', async e => {
     case 'push-off': return disablePush();
     case 'push-test': { const r = await op(() => api('/api/push/test', { method: 'POST' })); if (r) toast(r.phones ? `Test sent to ${r.phones} phone${r.phones === 1 ? '' : 's'}` : 'No phones are signed up yet'); return; }
     case 'push-hide': try { localStorage.setItem('palleturi.pushBanner', 'hide'); } catch (x) {} return render();
+    case 'stk-filter': stockFilter = el.dataset.f; return render();
+    case 'stk-tab': stockTab = el.dataset.tab; return render();
+    case 'stk-open': return openStockItem(el.dataset.id);
+    case 'stk-in': return openStockIn(el.dataset.id);
+    case 'stk-count': return openCount(el.dataset.id);
+    case 'stk-remove': return openRemove(el.dataset.id);
+    case 'stk-reason': document.querySelectorAll('#stk-reason button').forEach(b => b.classList.toggle('on', b === el)); return;
+    case 'stk-track': { const on = el.dataset.on === '1'; const r = await op(() => api(`/api/stock/${el.dataset.id}/settings`, { method: 'PUT', body: { track: on } })); if (r) { closeModal(); toast(on ? 'Now tracking this item' : 'Stopped tracking'); await loadStock(); render(); } return; }
+    case 'stk-in-save': { const qty = stockInTotal(); if (!qty) return; const bill = $('#stk-bill').value.trim(); return stockSave(`/api/stock/${el.dataset.id}/in`, { qty, billAmount: bill === '' ? null : bill, supplier: $('#stk-supplier').value }, r => `Added ${qty} · now ${r.stock} in stock`); }
+    case 'stk-count-save': { const actual = ($('#stk-actual').value || '').replace(/\D/g, ''); if (actual === '') return; return stockSave(`/api/stock/${el.dataset.id}/count`, { actual: +actual }, r => r.diff === null ? 'Count saved' : r.diff === 0 ? 'Count matches ✓' : r.diff < 0 ? `Count saved · ${-r.diff} missing` : `Count saved · ${r.diff} extra`); }
+    case 'stk-remove-save': { const qty = numIn('stk-rm'); if (!qty) return toast('Enter how many'); const reason = $('#stk-reason .on')?.dataset.r || 'other'; return stockSave(`/api/stock/${el.dataset.id}/remove`, { qty, reason }, r => `Removed ${qty} · now ${r.stock} in stock`); }
     case 'pay-open': return openPay(t, el.dataset.m);
     case 'cash-quick': $('#cash').value = el.dataset.v; return updateChange();
     case 'pay': return pay(t, el.dataset.m);
@@ -702,10 +894,19 @@ document.addEventListener('click', async e => {
 document.addEventListener('input', e => {
   if (e.target.id === 'search') { posQ = e.target.value; const box = $('#items'); if (box) box.innerHTML = itemsHTML(+parts()[1]); document.querySelectorAll('.cats button').forEach(b => b.classList.toggle('on', !posQ && b.dataset.cat === posCat)); }
   else if (e.target.id === 'cash') updateChange();
+  else if (e.target.id === 'stk-search') { stockQ = e.target.value; render(); }
+  else if (['stk-packs', 'stk-loose', 'stk-bill'].includes(e.target.id)) stockInTotal();
+  else if (e.target.id === 'stk-actual') countDiff();
 });
-document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'cash' && !$('#cash-done').disabled) $('#cash-done').click(); if (e.key === 'Escape' && $('#modal').innerHTML) closeModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && ['stk-actual', 'stk-loose', 'stk-packs', 'stk-supplier', 'stk-bill', 'stk-rm'].includes(e.target.id)) { const b = $('#stk-save') || $('[data-act=stk-remove-save]'); if (b && !b.disabled) b.click(); }
+  if (e.key === 'Enter' && e.target.id === 'cash' && !$('#cash-done').disabled) $('#cash-done').click(); if (e.key === 'Escape' && $('#modal').innerHTML) closeModal(); });
 document.addEventListener('change', async e => {
   const el = e.target;
+  if (el.dataset.stkset && stkItem) {
+    const r = await op(() => api(`/api/stock/${stkItem.id}/settings`, { method: 'PUT', body: { [el.dataset.stkset]: el.value } }));
+    if (r) { toast('Saved'); await loadStock(); }
+    return;
+  }
   if (el.dataset.set) {
     const r = await op(() => api('/api/settings', { method: 'PUT', body: { key: el.dataset.set, value: el.value } }));
     if (r) toast('Saved');

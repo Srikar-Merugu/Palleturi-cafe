@@ -387,3 +387,61 @@ table.list tr.cat td { color: var(--gold); font-weight: 700; padding-top: 16px; 
 .alert-banner .x:hover { background: rgba(0,0,0,.2); color: var(--text); }
 .panel .sub .i { display: inline-block; vertical-align: -3px; color: var(--green); }
 @media (prefers-reduced-motion: reduce) { .sendbtn { animation: none; } }
+
+/* ---------- Stock ---------- */
+.seg { display: inline-flex; padding: 4px; gap: 4px; border-radius: 12px; background: var(--s1); border: 1px solid var(--line); }
+.seg button { padding: 8px 16px; border-radius: 9px; font-weight: 600; color: var(--muted); }
+.seg button.on { background: var(--text); color: var(--bg); }
+.kpi.danger { border-color: var(--red); background: linear-gradient(135deg, var(--red-soft), transparent); }
+.kpi.danger .ico { background: var(--red); color: #fff; }
+.stk-bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 14px; }
+.stk-bar .cats { margin-bottom: 0; flex: 1; min-width: 0; }
+.stk-bar .cats button.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.stk-list { display: grid; gap: 8px; }
+.srow { display: grid; grid-template-columns: 40px minmax(0, 1fr) 130px 104px auto; align-items: center; gap: 14px; padding: 12px 14px; border-radius: var(--radius); background: var(--s1); border: 1px solid var(--line); border-left: 4px solid var(--c, var(--line)); }
+.srow .ic { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: color-mix(in srgb, var(--c, var(--muted)) 16%, transparent); color: var(--c, var(--muted)); }
+.srow .nm { text-align: left; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.srow .nm b { font-size: 15px; } .srow .nm:hover b { text-decoration: underline; text-underline-offset: 3px; }
+.srow .meta, .mrow .meta { font-size: 12.5px; color: var(--muted); }
+.srow .qty { text-align: right; font-variant-numeric: tabular-nums; }
+.srow .qty b { font-size: 22px; font-weight: 800; }
+.srow .qty span { color: var(--muted); font-size: 13px; }
+.srow .acts { display: flex; gap: 8px; justify-content: flex-end; }
+.srow .chip { justify-self: start; }
+.srow.st-ok .chip { background: rgba(76,195,138,.16); color: var(--green); }
+.srow.st-low .chip { background: var(--gold); color: var(--gold-ink); }
+.srow.st-low .qty b { color: var(--gold); }
+.srow.st-out .chip { background: var(--red); color: #fff; }
+.srow.st-out .qty b { color: var(--red); }
+.srow.st-untracked { opacity: .75; }
+.moves { display: grid; }
+.mrow { display: grid; grid-template-columns: 84px minmax(0, 1fr) 60px 60px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+.mrow .mt { font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; padding: 4px 8px; border-radius: 8px; text-align: center; background: var(--s3); color: var(--muted); }
+.mrow.mv-in .mt { background: rgba(76,195,138,.16); color: var(--green); }
+.mrow.mv-sale .mt { background: var(--gold-soft); color: var(--gold); }
+.mrow.mv-remove .mt, .mrow.miss .mt { background: var(--red-soft); color: var(--red); }
+.mrow .mn { display: flex; flex-direction: column; min-width: 0; }
+.mrow .mq { text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
+.mrow .ma { text-align: right; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.sheet.left { text-align: left; }
+.sheet.wide { max-width: 560px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.ipt.ro, .field .ro { background: var(--s2); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; color: var(--muted); }
+.change b small { font-size: 13px; font-weight: 600; }
+.stk-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.stk-top h1 { margin-bottom: 8px; }
+.stk-top .big { margin: 0; font-size: 40px; color: var(--text); }
+.stk-top .big small { font-size: 15px; color: var(--muted); font-weight: 600; }
+.stk-top.st-low .chip { background: var(--gold); color: var(--gold-ink); } .stk-top.st-low .big { color: var(--gold); }
+.stk-top.st-out .chip { background: var(--red); color: #fff; } .stk-top.st-out .big { color: var(--red); }
+.stk-top.st-ok .chip { background: rgba(76,195,138,.16); color: var(--green); }
+/* stock left on billing cards */
+.item .stk { display: block; margin-top: 4px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.item .stk.low { color: var(--gold); }
+.item .stk.out { color: var(--red); }
+@media (max-width: 860px) {
+  .srow { grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-areas: "ic nm qty" "ic chip acts"; row-gap: 8px; }
+  .srow .ic { grid-area: ic; align-self: start; } .srow .nm { grid-area: nm; } .srow .qty { grid-area: qty; } .srow .chip { grid-area: chip; } .srow .acts { grid-area: acts; }
+  .mrow { grid-template-columns: 74px minmax(0, 1fr) 50px; } .mrow .ma { display: none; }
+}
+@media (max-width: 520px) { .grid2 { grid-template-columns: 1fr; } .stk-bar .search { width: 100%; } }

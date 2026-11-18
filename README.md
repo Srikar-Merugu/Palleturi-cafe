@@ -52,6 +52,7 @@ them in **Settings**.
 | `attempts` | Wrong PIN tries, for the 5-minute lockout |
 | `order_log` | Every order sent to the owner (staff "Send order" and QR orders) |
 | `push_subs` | Owner phones signed up for notifications |
+| `stock_moves` | Every stock change: delivery, sale, shelf count, removal |
 
 ## Going live (Vercel + MongoDB Atlas)
 
@@ -63,6 +64,16 @@ them in **Settings**.
    random string), plus the optional WhatsApp ones.
 3. Print the stickers from **QR stickers** *after* deploying, so the codes point
    at the live address.
+
+## Stock (inventory)
+
+Owner only. Packaged items (cigarettes, cool drinks, biscuits, cookies, bun, rusk) are
+tracked by default; any item can be switched on or off. **Add** records a delivery
+(crates/packets + loose, optional amount paid → buying price), paid bills reduce stock
+automatically, **Count** records a shelf count and the difference, **Remove** handles
+damaged/expired/own use. Low and sold-out items notify the owner, sold-out items are
+hidden from the QR menu, and the nightly report adds profit and a low-stock list.
+Items start as "not counted" so nothing disappears until the owner enters stock.
 
 ## Order notifications on the owner’s phone
 

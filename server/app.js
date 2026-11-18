@@ -7,6 +7,7 @@ const { dayKey, hourOf } = require('./time');
 const { summarize, reportText } = require('./report');
 const { sendWhatsApp, whatsappConfigured } = require('./whatsapp');
 const { notifyOwners, pushConfigured } = require('./push');
+const { registerStock, stockDefaults, isOut } = require('./stock');
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
 const DB_NAME = process.env.MONGODB_DB || 'palleturi';
@@ -33,6 +34,9 @@ async function setup() {
   await col('orders').createIndex({ at: 1 });
   await col('order_log').createIndex({ day: 1 });
   if (!(await col('items').countDocuments())) await col('items').insertMany(DEFAULT_ITEMS);
+  await stockApi.migrate();
+  await col('stock_moves').createIndex({ item: 1, at: -1 });
+  await col('stock_moves').createIndex({ at: -1 });
   await col('settings').updateOne(
     { _id: 'cafe' },
     { $setOnInsert: { upi: '', wa: '919398895450', ownerPin: process.env.OWNER_PIN || '1234', staffPin: process.env.STAFF_PIN || '0000', lastReport: '', lastAutoReport: '' } },
@@ -42,7 +46,7 @@ async function setup() {
 }
 const getSettings = () => col('settings').findOne({ _id: 'cafe' });
 const getItems = () => col('items').find().sort({ sort: 1 }).toArray();
-const itemOut = (i) => ({ id: i._id, name: i.name, te: i.te, cat: i.cat, price: i.price, qr: i.qr });
+const itemOut = (i) => ({ id: i._id, name: i.name, te: i.te, cat: i.cat, price: i.price, qr: i.qr, track: !!i.track, stock: i.stock ?? null, lowAt: i.lowAt ?? 0, unit: i.unit || '' });
 const placeName = (t) => (t === 0 ? 'Parcel' : 'Table ' + t);
 const rs = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
 // "2 × Masala Tea, 1 × Samosa Plate" and the total, using current prices.
@@ -103,10 +107,11 @@ async function auth(req, res, next) {
   } catch (e) { next(e); }
 }
 const ownerOnly = (req, res, next) => (req.role === 'owner' ? next() : bad(res, 'Owner only', 403));
+const stockApi = registerStock(app, { col, auth, ownerOnly, wrap, bad, broadcast, notifyOwners, dayKey });
 
 /* ---------------- public: customer QR menu ---------------- */
 app.get('/api/menu', wrap(async (req, res) => {
-  const items = (await getItems()).filter((i) => i.qr && !CATS.find((c) => c.id === i.cat)?.staffOnly);
+  const items = (await getItems()).filter((i) => i.qr && !isOut(i) && !CATS.find((c) => c.id === i.cat)?.staffOnly);
   res.json({ tableCount: TABLE_COUNT, cats: CATS.filter((c) => !c.staffOnly), items: items.map(itemOut) });
 }));
 
@@ -118,13 +123,15 @@ app.post('/api/orders', wrap(async (req, res) => {
   if (limited(req, 'order', 6, 60 * 1000)) return bad(res, 'Too many orders, please wait a minute', 429);
   const items = await getItems();
   const lines = {};
+  let soldOut = 0;
   for (const [id, q] of Object.entries(raw).slice(0, 40)) {
     const it = items.find((i) => i._id === id);
     const qty = Math.floor(Number(q));
+    if (it && isOut(it)) { soldOut++; continue; }
     if (!it || !it.qr || it.cat === 'cig' || !(qty > 0 && qty <= 20)) continue;
     lines[id] = qty;
   }
-  if (!Object.keys(lines).length) return bad(res, 'Empty order');
+  if (!Object.keys(lines).length) return bad(res, soldOut ? 'Sorry, that item just ran out. Please choose something else.' : 'Empty order');
   const order = { table, lines, at: Date.now() };
   const r = await col('orders').insertOne(order);
   await broadcast();
@@ -234,11 +241,12 @@ app.post('/api/tables/:t/settle', auth, wrap(async (req, res) => {
   const items = await getItems();
   const lines = Object.entries(tb.lines || {}).filter(([, q]) => q > 0).map(([id, qty]) => {
     const it = items.find((i) => i._id === id) || { name: id, cat: 'tea', price: 0 };
-    return { id, name: it.name, cat: it.cat, price: it.price, qty };
+    return { id, name: it.name, cat: it.cat, price: it.price, cost: it.cost ?? null, qty };
   });
   const now = new Date();
   const sale = { table: t, lines, total: lines.reduce((a, l) => a + l.price * l.qty, 0), method, at: now.getTime(), day: dayKey(now), by: req.role };
-  await col('sales').insertOne(sale);
+  const ins = await col('sales').insertOne(sale);
+  await stockApi.deductForSale(lines, String(ins.insertedId), req.role);
   await broadcast();
   await notifyOwners(col, {
     title: `✅ ${placeName(t)} paid ${rs(sale.total)} · ${method}`,
@@ -289,7 +297,8 @@ app.post('/api/push/test', auth, ownerOnly, wrap(async (req, res) => {
 async function buildReport(day) {
   const [sales, open] = await Promise.all([col('sales').find({ day }).toArray(), col('tables').countDocuments()]);
   const r = summarize(sales);
-  return { day, ...r, open, text: reportText(r, day, open) };
+  const low = await stockApi.lowStockList();
+  return { day, ...r, open, low, text: reportText(r, day, open, low) };
 }
 
 app.get('/api/report', auth, ownerOnly, wrap(async (req, res) => {
@@ -336,7 +345,8 @@ app.post('/api/items', auth, ownerOnly, wrap(async (req, res) => {
   const name = String(req.body?.name || '').trim().slice(0, 60), cat = req.body?.cat, price = Math.floor(Number(req.body?.price));
   if (!name || !CATS.find((c) => c.id === cat) || !(price > 0 && price <= 100000)) return bad(res, 'Enter a name, category and price');
   const last = await col('items').find().sort({ sort: -1 }).limit(1).next();
-  await col('items').insertOne({ _id: 'x' + Date.now().toString(36), name, te: '', cat, price, qr: cat !== 'cig', sort: (last?.sort ?? 0) + 1 });
+  const newId = 'x' + Date.now().toString(36);
+  await col('items').insertOne({ _id: newId, name, te: '', cat, price, qr: cat !== 'cig', sort: (last?.sort ?? 0) + 1, ...stockDefaults(newId, cat) });
   await broadcast();
   res.json({ ok: true });
 }));
