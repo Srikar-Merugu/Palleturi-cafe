@@ -1,0 +1,23 @@
+{
+  "name": "palleturi-cafe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Palleturi Cafe counter app: table billing, QR ordering and a daily WhatsApp report, backed by MongoDB.",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "dev": "node --watch --env-file-if-exists=.env server/index.js"
+  },
+  "engines": {
+    "node": ">=22.9"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Srikar-Merugu/Palleturi-cafe.git"
+  },
+  "dependencies": {
+    "express": "^4.22.3",
+    "mongodb": "^6.12.0"
+  }
+}
