@@ -38,6 +38,8 @@ const ICONS = {
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/>',
   cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 10v4M18 10v4"/>',
   back: '<path d="m14.5 18-6-6 6-6"/>',
+  send: '<path d="M21 3 10 14"/><path d="M21 3 14.5 21l-4.5-7-7-4.5L21 3z"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   cup: '<path d="M4 9.5h12V14a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9.5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 3.5c-.8.9.8 1.6 0 2.5M12 3.5c-.8.9.8 1.6 0 2.5"/>',
   samosa: '<path d="M12 4 3.5 19h17L12 4z"/><path d="M8.5 15h7M10 11.5h4"/>',
   bottle: '<path d="M10 2.5h4V5l1.6 2.6V20a1.8 1.8 0 0 1-1.8 1.8h-3.6A1.8 1.8 0 0 1 8.4 20V7.6L10 5V2.5z"/><path d="M8.4 12h7.2M8.4 16h7.2"/>',
@@ -45,6 +47,69 @@ const ICONS = {
   cig: '<rect x="2.5" y="13" width="15" height="4" rx="1"/><path d="M13.5 13v4"/><path d="M20.5 13v4M18.5 4.5c0 2 2 2 2 4M16.5 6.5c0 1.5 1 2 1 3"/>',
 };
 const CAT_ICON = { tea: 'cup', snacks: 'samosa', drinks: 'bottle', cookies: 'cookie', cig: 'cig' };
+
+/* ---------------- phone notifications (owner) ---------------- */
+// pushState: 'unknown' | 'on' | 'off' | 'blocked' | 'ios-install' | 'unsupported'
+let swReg = null, pushState = 'unknown';
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const b64ToU8 = s => { const b = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+const deviceName = () => { const ua = navigator.userAgent; return /android/i.test(ua) ? 'Android' : /iphone|ipad/i.test(ua) ? 'iPhone' : /mac/i.test(ua) ? 'Mac' : /windows/i.test(ua) ? 'Windows' : 'Browser'; };
+
+async function checkPush() {
+  try {
+    if (!pushSupported() || !swReg) pushState = isIOS && !isStandalone() ? 'ios-install' : 'unsupported';
+    else if (Notification.permission === 'denied') pushState = 'blocked';
+    else pushState = (await swReg.pushManager.getSubscription()) ? 'on' : 'off';
+  } catch (e) { pushState = 'unsupported'; }
+  if (S && !$('#modal').innerHTML) render();
+}
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').then(r => { swReg = r; checkPush(); }).catch(() => checkPush());
+  navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.open) location.href = e.data.open; });
+} else { checkPush(); }
+
+async function enablePush() {
+  if (!S.pushKey) return toast('Notifications are not set up on the server yet');
+  if (!pushSupported() || !swReg) return toast(isIOS ? 'On iPhone, add the app to the Home Screen first' : 'This browser can’t show notifications');
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { pushState = perm === 'denied' ? 'blocked' : 'off'; render(); return toast('Notifications were not allowed'); }
+    const sub = await swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(S.pushKey) });
+    await api('/api/push/subscribe', { method: 'POST', body: { sub: sub.toJSON(), device: deviceName() } });
+    pushState = 'on'; render(); toast('Order alerts are on for this phone');
+  } catch (e) { toast(e.message || 'Could not turn on notifications'); }
+}
+async function disablePush() {
+  try {
+    const sub = swReg && await swReg.pushManager.getSubscription();
+    if (sub) { await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {}); await sub.unsubscribe(); }
+  } catch (e) {}
+  pushState = 'off'; render(); toast('Order alerts turned off on this phone');
+}
+function pushCard() {
+  const msg = {
+    on: `<p class="sub">${ico('check', 16)} <b style="color:var(--green)">On.</b> This phone gets a notification for every staff order, QR order and paid bill, even when the app is closed.</p>
+         <div class="row"><button class="btn" data-act="push-test">Send a test</button><button class="btn ghost" data-act="push-off">Turn off</button></div>`,
+    off: `<p class="sub">Get a notification on this phone for every order and paid bill, even when the app is closed.</p>
+          <button class="btn gold" data-act="push-on">${ico('bell', 18)} Turn on order alerts</button>`,
+    blocked: `<p class="sub">Notifications are blocked for this site. Allow them in the browser’s site settings (tap the lock icon next to the address), then reload.</p>`,
+    'ios-install': `<p class="sub">On iPhone: tap <b>Share</b> → <b>Add to Home Screen</b>, open <b>Palleturi</b> from the home screen, log in, and turn on alerts here.</p>`,
+    unsupported: `<p class="sub">This browser can’t show notifications. Use Chrome on Android, or Safari on iPhone with the app added to the Home Screen.</p>`,
+    unknown: `<p class="sub">Checking…</p>`,
+  };
+  return `<h2>Order alerts on this phone</h2>${msg[pushState] || msg.unknown}`;
+}
+function pushBanner() {
+  let hidden = false; try { hidden = localStorage.getItem('palleturi.pushBanner') === 'hide'; } catch (e) {}
+  if (role !== 'owner' || hidden || !['off', 'ios-install'].includes(pushState) || !S.pushKey) return '';
+  return `<div class="alert-banner">${ico('bell', 22)}
+    <div class="txt"><b>Get every order on your phone</b><div class="sub">${pushState === 'off' ? 'Staff orders, QR orders and paid bills — even when the app is closed.' : 'On iPhone, first add Palleturi to the Home Screen (Share → Add to Home Screen).'}</div></div>
+    ${pushState === 'off' ? `<button class="btn gold small" data-act="push-on">Turn on</button>` : ''}
+    <button class="x" data-act="push-hide" aria-label="Hide">×</button></div>`;
+}
+
 const ico = (name, size = 22) => `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
 function toast(msg) {
@@ -263,6 +328,7 @@ function viewTables() {
       <div><h1>Tables</h1><div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
       <div class="legend"><span><i></i>Free</span><span><i class="busy"></i>Occupied</span><span><i class="ping"></i>New QR order</span><span><i class="late"></i>Open ${LATE_MIN}+ min</span></div>
     </div>
+    ${pushBanner()}
     ${kpis}
     ${incoming}
     <div class="tables">${Array.from({ length: S.tableCount }, (_, i) => card(i + 1)).join('')}${card(0)}</div>`;
@@ -292,6 +358,8 @@ function viewTable(t) {
   if (!(t >= 0 && t <= S.tableCount)) return `<p>Unknown table. <a href="#/">Back</a></p>`;
   const tb = S.tables[t] || { lines: {} };
   const lines = tb.lines, total = linesTotal(lines), count = linesCount(lines);
+  const sent = tb.sent || {};
+  const unsent = Object.entries(lines).reduce((a, [id, q]) => a + Math.max(0, q - (sent[id] || 0)), 0);
   const billLines = Object.entries(lines).filter(([, q]) => q > 0);
   const pendHere = S.pending.filter(o => +o.table === t);
   const catCount = c => S.items.filter(i => i.cat === c.id).reduce((a, i) => a + (lines[i.id] || 0), 0);
@@ -322,7 +390,7 @@ function viewTable(t) {
         </div>
         <div class="r-lines">${billLines.length ? billLines.map(([id, q]) => { const it = item(id); return `
           <div class="r-line">
-            <div><div class="nm">${esc(it?.name || id)}</div><div class="each">${rs(it?.price || 0)} each</div></div>
+            <div><div class="nm">${esc(it?.name || id)}${q > (sent[id] || 0) ? `<span class="new">+${q - (sent[id] || 0)} new</span>` : ''}</div><div class="each">${rs(it?.price || 0)} each</div></div>
             <span class="stepper"><button data-act="dec" data-t="${t}" data-id="${id}" aria-label="Remove one">−</button><span>${q}</span><button data-act="add" data-t="${t}" data-id="${id}" aria-label="Add one">+</button></span>
             <span class="amt">${rs((it?.price || 0) * q)}</span>
           </div>`; }).join('') : `<div class="r-empty">${ico('receipt', 38)}<div>Tap items on the left<br>to add them to this bill</div></div>`}</div>
@@ -330,10 +398,11 @@ function viewTable(t) {
           <div class="r-row"><span>Items</span><span class="num">${count}</span></div>
           <div class="r-total"><span>Total</span><b>${rs(total)}</b></div>
         </div>
+        <div class="r-send">${unsent ? `<button class="sendbtn" data-act="send" data-t="${t}">${ico('send', 19)} Send order · ${unsent} new item${unsent === 1 ? '' : 's'}</button>` : count ? `<div class="sent-ok">${ico('check', 16)} All items sent to the owner</div>` : ''}</div>
         <div class="r-pay">${payBtns}</div>
       </aside>
     </div>
-    <div class="mbar"><div class="sum">${count} item${count === 1 ? '' : 's'}<b>${rs(total)}</b></div>${payBtns}</div>`;
+    <div class="mbar"><div class="sum">${count} item${count === 1 ? '' : 's'}<b>${rs(total)}</b></div>${unsent ? `<button class="paybtn cash" data-act="send" data-t="${t}">${ico('send', 18)} Send ${unsent} new</button>` : payBtns}</div>`;
 }
 let bumpId = null, bumpTimer = null;
 function addLine(t, id, d) {
@@ -550,7 +619,8 @@ function viewSettings() {
     <h1>Settings</h1>
     <div class="rgrid">
       <div class="panel">
-        <h2>Cafe</h2>
+        ${pushCard()}
+        <h2 style="margin-top:22px">Cafe</h2>
         <div class="field"><label for="upi">UPI ID (for the payment QR)</label><input id="upi" data-set="upi" placeholder="name@bank" value="${esc(st.upi)}"></div>
         <div class="field"><label for="wa">Owner WhatsApp (with country code)</label><input id="wa" data-set="wa" inputmode="numeric" value="${esc(st.wa)}"></div>
         <div class="row">
@@ -599,6 +669,11 @@ document.addEventListener('click', async e => {
     case 'add': return addLine(t, el.dataset.id, 1);
     case 'dec': return addLine(t, el.dataset.id, -1);
     case 'clear': if (confirm(`Clear the whole bill for ${tname(t)}?`)) { delete S.tables[t]; render(); op(() => api(`/api/tables/${t}`, { method: 'DELETE' })); } return;
+    case 'send': { const tb = S.tables[t]; if (tb) { tb.sent = { ...tb.lines }; render(); } const r = await op(() => api(`/api/tables/${t}/send`, { method: 'POST' })); if (r) toast(`Order sent · ${r.count} item${r.count === 1 ? '' : 's'}`); return; }
+    case 'push-on': return enablePush();
+    case 'push-off': return disablePush();
+    case 'push-test': { const r = await op(() => api('/api/push/test', { method: 'POST' })); if (r) toast(r.phones ? `Test sent to ${r.phones} phone${r.phones === 1 ? '' : 's'}` : 'No phones are signed up yet'); return; }
+    case 'push-hide': try { localStorage.setItem('palleturi.pushBanner', 'hide'); } catch (x) {} return render();
     case 'pay-open': return openPay(t, el.dataset.m);
     case 'cash-quick': $('#cash').value = el.dataset.v; return updateChange();
     case 'pay': return pay(t, el.dataset.m);

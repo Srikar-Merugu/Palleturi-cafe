@@ -50,6 +50,8 @@ them in **Settings**.
 | `settings` | UPI ID, WhatsApp number, PINs |
 | `sessions` | Login tokens (expire after 30 days) |
 | `attempts` | Wrong PIN tries, for the 5-minute lockout |
+| `order_log` | Every order sent to the owner (staff "Send order" and QR orders) |
+| `push_subs` | Owner phones signed up for notifications |
 
 ## Going live (Vercel + MongoDB Atlas)
 
@@ -61,6 +63,13 @@ them in **Settings**.
    random string), plus the optional WhatsApp ones.
 3. Print the stickers from **QR stickers** *after* deploying, so the codes point
    at the live address.
+
+## Order notifications on the owner’s phone
+
+Staff add items and tap **Send order**; only items added since the last send go out.
+QR orders and paid bills notify too. The owner turns alerts on in **Settings → Order
+alerts on this phone** (on iPhone, first Share → Add to Home Screen). Needs the
+`VAPID_*` keys from `.env.example`.
 
 ## Nightly WhatsApp report (10 PM)
 

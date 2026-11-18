@@ -372,3 +372,18 @@ table.list tr.cat td { color: var(--gold); font-weight: 700; padding-top: 16px; 
   .stickers { grid-template-columns: repeat(3, 1fr); }
   .sticker { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* ---------- Send order & alerts ---------- */
+.r-line .new { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 6px; background: var(--gold); color: var(--gold-ink); font-size: 11px; font-weight: 800; vertical-align: 2px; }
+.r-send { padding: 4px 20px 0; }
+.sendbtn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 14px 10px; border-radius: 13px; background: var(--board); color: var(--cream); font-weight: 800; font-size: 15.5px; box-shadow: 0 0 0 0 rgba(140,88,98,.5); animation: sendpulse 2s ease-in-out infinite; }
+.sendbtn:hover { background: var(--board-deep); }
+@keyframes sendpulse { 50% { box-shadow: 0 0 0 5px rgba(140,88,98,.18); } }
+.sent-ok { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 0 2px; font-size: 13px; font-weight: 600; color: #2E7D57; }
+.alert-banner { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; padding: 14px 16px; border-radius: var(--radius); background: linear-gradient(135deg, rgba(140,88,98,.35), rgba(140,88,98,.12)); border: 1px solid var(--board); }
+.alert-banner > .i { color: var(--gold); }
+.alert-banner .txt { flex: 1; }
+.alert-banner .x { width: 32px; height: 32px; border-radius: 8px; color: var(--muted); font-size: 22px; line-height: 1; }
+.alert-banner .x:hover { background: rgba(0,0,0,.2); color: var(--text); }
+.panel .sub .i { display: inline-block; vertical-align: -3px; color: var(--green); }
+@media (prefers-reduced-motion: reduce) { .sendbtn { animation: none; } }

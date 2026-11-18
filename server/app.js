@@ -6,6 +6,7 @@ const { CATS, DEFAULT_ITEMS } = require('./menu');
 const { dayKey, hourOf } = require('./time');
 const { summarize, reportText } = require('./report');
 const { sendWhatsApp, whatsappConfigured } = require('./whatsapp');
+const { notifyOwners, pushConfigured } = require('./push');
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
 const DB_NAME = process.env.MONGODB_DB || 'palleturi';
@@ -30,6 +31,7 @@ async function setup() {
   await col('attempts').createIndex({ at: 1 }, { expireAfterSeconds: 5 * 60 });
   await col('sales').createIndex({ day: 1 });
   await col('orders').createIndex({ at: 1 });
+  await col('order_log').createIndex({ day: 1 });
   if (!(await col('items').countDocuments())) await col('items').insertMany(DEFAULT_ITEMS);
   await col('settings').updateOne(
     { _id: 'cafe' },
@@ -41,6 +43,26 @@ async function setup() {
 const getSettings = () => col('settings').findOne({ _id: 'cafe' });
 const getItems = () => col('items').find().sort({ sort: 1 }).toArray();
 const itemOut = (i) => ({ id: i._id, name: i.name, te: i.te, cat: i.cat, price: i.price, qr: i.qr });
+const placeName = (t) => (t === 0 ? 'Parcel' : 'Table ' + t);
+const rs = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+// "2 × Masala Tea, 1 × Samosa Plate" and the total, using current prices.
+function describe(lines, items) {
+  let total = 0;
+  const text = Object.entries(lines).filter(([, q]) => q > 0).map(([id, q]) => {
+    const it = items.find((i) => i._id === id) || { name: id, price: 0 };
+    total += it.price * q;
+    return `${q} × ${it.name}`;
+  }).join(', ');
+  return { text, total };
+}
+// Record an order (for history) and tell the owner's phone(s).
+async function logAndNotify({ table, lines, source, by, title }) {
+  const items = await getItems();
+  const { text, total } = describe(lines, items);
+  const now = new Date();
+  await col('order_log').insertOne({ table, lines, total, source, by, at: now.getTime(), day: dayKey(now) });
+  await notifyOwners(col, { title, body: `${text} · ${rs(total)}`, url: `/#/table/${table}`, tag: `order-${table}-${now.getTime()}` });
+}
 
 /* ---------------- live updates ---------------- */
 // Every change bumps a counter in MongoDB. Counter screens poll /api/rev every few
@@ -106,6 +128,7 @@ app.post('/api/orders', wrap(async (req, res) => {
   const order = { table, lines, at: Date.now() };
   const r = await col('orders').insertOne(order);
   await broadcast();
+  await logAndNotify({ table, lines, source: 'qr', by: 'customer', title: `📱 QR order · ${placeName(table)}` });
   res.json({ ok: true, id: r.insertedId });
 }));
 
@@ -155,7 +178,8 @@ app.get('/api/state', auth, wrap(async (req, res) => {
     today,
     cats: CATS,
     items: items.map(itemOut),
-    tables: Object.fromEntries(tables.map((t) => [t._id, { lines: t.lines, opened: t.opened }])),
+    tables: Object.fromEntries(tables.map((t) => [t._id, { lines: t.lines, sent: t.sent || {}, opened: t.opened }])),
+    pushKey: process.env.VAPID_PUBLIC_KEY || null,
     pending: orders.map((o) => ({ id: String(o._id), table: o.table, lines: o.lines, at: o.at })),
     settings,
   });
@@ -172,9 +196,29 @@ app.post('/api/tables/:t/lines', auth, wrap(async (req, res) => {
     await col('tables').updateOne({ _id: t, [key]: { $gt: 0 } }, { $inc: { [key]: -1 } });
     await col('tables').updateOne({ _id: t, [key]: { $lte: 0 } }, { $unset: { [key]: '' } });
     await col('tables').deleteOne({ _id: t, lines: {} });
+    // If an already-sent item is removed, lower its "sent" count too, so adding it
+    // back later counts as new and is sent again.
+    const tb = await col('tables').findOne({ _id: t });
+    const have = tb?.lines?.[id] || 0;
+    if (tb && (tb.sent?.[id] || 0) > have) await col('tables').updateOne({ _id: t }, have ? { $set: { ['sent.' + id]: have } } : { $unset: { ['sent.' + id]: '' } });
   }
   await broadcast();
   res.json({ ok: true });
+}));
+
+// Staff tap "Send order": everything added since the last send goes to the owner.
+app.post('/api/tables/:t/send', auth, wrap(async (req, res) => {
+  const t = Number(req.params.t);
+  if (!validTable(t)) return bad(res, 'Unknown table');
+  const tb = await col('tables').findOne({ _id: t });
+  const fresh = {};
+  for (const [id, q] of Object.entries(tb?.lines || {})) { const d = q - (tb.sent?.[id] || 0); if (d > 0) fresh[id] = d; }
+  if (!Object.keys(fresh).length) return bad(res, 'Nothing new to send');
+  // $max: items added while we were working stay "not sent".
+  await col('tables').updateOne({ _id: t }, { $max: Object.fromEntries(Object.keys(fresh).map((id) => ['sent.' + id, tb.lines[id]])) });
+  await broadcast();
+  await logAndNotify({ table: t, lines: fresh, source: 'staff', by: req.role, title: `🧾 ${placeName(t)} · new order` });
+  res.json({ ok: true, count: Object.values(fresh).reduce((a, q) => a + q, 0) });
 }));
 
 app.delete('/api/tables/:t', auth, wrap(async (req, res) => {
@@ -196,6 +240,11 @@ app.post('/api/tables/:t/settle', auth, wrap(async (req, res) => {
   const sale = { table: t, lines, total: lines.reduce((a, l) => a + l.price * l.qty, 0), method, at: now.getTime(), day: dayKey(now), by: req.role };
   await col('sales').insertOne(sale);
   await broadcast();
+  await notifyOwners(col, {
+    title: `✅ ${placeName(t)} paid ${rs(sale.total)} · ${method}`,
+    body: lines.map((l) => `${l.qty} × ${l.name}`).join(', '),
+    url: '/#/', tag: `paid-${t}-${sale.at}`,
+  });
   res.json({ ok: true, total: sale.total, method });
 }));
 
@@ -203,7 +252,8 @@ app.post('/api/orders/:id/accept', auth, wrap(async (req, res) => {
   if (!ObjectId.isValid(req.params.id)) return bad(res, 'Bad order');
   const o = await col('orders').findOneAndDelete({ _id: new ObjectId(req.params.id) });
   if (!o) return bad(res, 'Order already handled', 404);
-  const inc = Object.fromEntries(Object.entries(o.lines).map(([id, q]) => ['lines.' + id, q]));
+  // The owner was already notified when the customer ordered, so mark these as sent.
+  const inc = Object.fromEntries(Object.entries(o.lines).flatMap(([id, q]) => [['lines.' + id, q], ['sent.' + id, q]]));
   await col('tables').updateOne({ _id: o.table }, { $inc: inc, $setOnInsert: { opened: Date.now() } }, { upsert: true });
   await broadcast();
   res.json({ ok: true, table: o.table });
@@ -214,6 +264,25 @@ app.post('/api/orders/:id/reject', auth, wrap(async (req, res) => {
   await col('orders').deleteOne({ _id: new ObjectId(req.params.id) });
   await broadcast();
   res.json({ ok: true });
+}));
+
+/* ---------------- owner: phone notifications ---------------- */
+app.post('/api/push/subscribe', auth, ownerOnly, wrap(async (req, res) => {
+  const sub = req.body?.sub;
+  const ok = sub && typeof sub.endpoint === 'string' && /^https:\/\//.test(sub.endpoint) && sub.endpoint.length < 1000 && typeof sub.keys?.p256dh === 'string' && typeof sub.keys?.auth === 'string';
+  if (!ok) return bad(res, 'Bad subscription');
+  const clean = { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } };
+  await col('push_subs').updateOne({ _id: sub.endpoint }, { $set: { sub: clean, role: 'owner', device: String(req.body?.device || '').slice(0, 80), createdAt: new Date() } }, { upsert: true });
+  res.json({ ok: true, phones: await col('push_subs').countDocuments({ role: 'owner' }) });
+}));
+app.post('/api/push/unsubscribe', auth, wrap(async (req, res) => {
+  if (typeof req.body?.endpoint === 'string') await col('push_subs').deleteOne({ _id: req.body.endpoint });
+  res.json({ ok: true });
+}));
+app.post('/api/push/test', auth, ownerOnly, wrap(async (req, res) => {
+  if (!pushConfigured()) return bad(res, 'Notifications are not set up on the server');
+  const n = await notifyOwners(col, { title: '🔔 Palleturi Cafe', body: 'Notifications are working on this phone.', url: '/#/', tag: 'test' });
+  res.json({ ok: true, phones: n });
 }));
 
 /* ---------------- owner: report ---------------- */
@@ -296,7 +365,7 @@ app.post('/api/demo/seed', auth, ownerOnly, wrap(async (req, res) => {
 }));
 
 app.post('/api/reset', auth, ownerOnly, wrap(async (req, res) => {
-  await Promise.all([col('sales').deleteMany({}), col('tables').deleteMany({}), col('orders').deleteMany({})]);
+  await Promise.all([col('sales').deleteMany({}), col('tables').deleteMany({}), col('orders').deleteMany({}), col('order_log').deleteMany({})]);
   await broadcast();
   res.json({ ok: true });
 }));
