@@ -114,10 +114,10 @@ const stockApi = registerStock(app, { col, auth, ownerOnly, wrap, bad, broadcast
 /* ---------------- public: customer QR menu ---------------- */
 app.get('/api/menu', wrap(async (req, res) => {
   const items = (await getItems()).filter((i) => i.qr && !isOut(i) && !CATS.find((c) => c.id === i.cat)?.staffOnly);
-  res.json({ tableCount: TABLE_COUNT, cats: CATS.filter((c) => !c.staffOnly), items: items.map(itemOut) });
+  res.json({ open: (await dayState()).status === 'open', tableCount: TABLE_COUNT, cats: CATS.filter((c) => !c.staffOnly), items: items.map(itemOut) });
 }));
 
-app.post('/api/orders', wrap(async (req, res) => {
+app.post('/api/orders', requireOpen(true), wrap(async (req, res) => {
   const table = Number(req.body?.table);
   const raw = req.body?.lines;
   if (!validTable(table)) return bad(res, 'Unknown table');
@@ -173,8 +173,9 @@ app.get('/api/state', auth, wrap(async (req, res) => {
   const [items, tables, orders] = await Promise.all([getItems(), col('tables').find().toArray(), col('orders').find().sort({ at: 1 }).toArray()]);
   const settings = { upi: st.upi, wa: st.wa, lastReport: st.lastReport, waAuto: whatsappConfigured(), lastFloat: st.lastFloat || 0 };
   // Today's closing, if the cafe was closed (difference only for the owner: staff count "blind").
-  const [c, o] = await Promise.all([latestClosing(dayKey()), latestOpening(dayKey())]);
-  const opening = o ? { at: o.at, float: o.float, by: o.by } : null;
+  const ds = await dayState();
+  const c = ds.closing, o = ds.opening;
+  const opening = o ? { at: o.at, float: o.float, by: o.by, reopen: !!o.reopen } : null;
   const closing = c ? { at: c.at, counted: c.counted, by: c.by, ...(req.role === 'owner' ? { diff: c.diff, expected: c.expected } : {}) } : null;
   if (req.role === 'owner') Object.assign(settings, { ownerPin: st.ownerPin, staffPin: st.staffPin });
   // Today's takings, owner only (staff don't see revenue).
@@ -182,6 +183,8 @@ app.get('/api/state', auth, wrap(async (req, res) => {
   if (req.role === 'owner') {
     const [agg] = await col('sales').aggregate([{ $match: { day: dayKey() } }, { $group: { _id: null, total: { $sum: '$total' }, bills: { $sum: 1 }, cash: { $sum: { $cond: [{ $eq: ['$method', 'Cash'] }, '$total', 0] } }, upi: { $sum: { $cond: [{ $eq: ['$method', 'UPI'] }, '$total', 0] } } } }]).toArray();
     today = { total: agg?.total || 0, bills: agg?.bills || 0, cash: agg?.cash || 0, upi: agg?.upi || 0 };
+    // Cash taken since the latest Open/Reopen: what tonight's cash check adds to the opening cash.
+    today.cashSinceOpen = o ? await cashSince(dayKey(), o.at) : today.cash;
   }
   res.json({
     role: req.role,
@@ -189,6 +192,7 @@ app.get('/api/state', auth, wrap(async (req, res) => {
     reportHour: REPORT_HOUR,
     rev: st.rev || 0,
     today,
+    dayStatus: ds.status,
     opening,
     closing,
     cats: CATS,
@@ -200,7 +204,7 @@ app.get('/api/state', auth, wrap(async (req, res) => {
   });
 }));
 
-app.post('/api/tables/:t/lines', auth, wrap(async (req, res) => {
+app.post('/api/tables/:t/lines', auth, requireOpen(), wrap(async (req, res) => {
   const t = Number(req.params.t), id = req.body?.id, d = Number(req.body?.d);
   if (!validTable(t) || !validId(id) || ![1, -1].includes(d)) return bad(res, 'Bad request');
   if (!(await col('items').findOne({ _id: id }))) return bad(res, 'Unknown item');
@@ -222,7 +226,7 @@ app.post('/api/tables/:t/lines', auth, wrap(async (req, res) => {
 }));
 
 // Staff tap "Send order": everything added since the last send goes to the owner.
-app.post('/api/tables/:t/send', auth, wrap(async (req, res) => {
+app.post('/api/tables/:t/send', auth, requireOpen(), wrap(async (req, res) => {
   const t = Number(req.params.t);
   if (!validTable(t)) return bad(res, 'Unknown table');
   const tb = await col('tables').findOne({ _id: t });
@@ -236,13 +240,13 @@ app.post('/api/tables/:t/send', auth, wrap(async (req, res) => {
   res.json({ ok: true, count: Object.values(fresh).reduce((a, q) => a + q, 0) });
 }));
 
-app.delete('/api/tables/:t', auth, wrap(async (req, res) => {
+app.delete('/api/tables/:t', auth, requireOpen(), wrap(async (req, res) => {
   await col('tables').deleteOne({ _id: Number(req.params.t) });
   await broadcast();
   res.json({ ok: true });
 }));
 
-app.post('/api/tables/:t/settle', auth, wrap(async (req, res) => {
+app.post('/api/tables/:t/settle', auth, requireOpen(), wrap(async (req, res) => {
   const t = Number(req.params.t), method = req.body?.method === 'UPI' ? 'UPI' : 'Cash';
   const tb = await col('tables').findOneAndDelete({ _id: t });
   if (!tb) return bad(res, 'This table has no bill', 404);
@@ -264,7 +268,7 @@ app.post('/api/tables/:t/settle', auth, wrap(async (req, res) => {
   res.json({ ok: true, total: sale.total, method });
 }));
 
-app.post('/api/orders/:id/accept', auth, wrap(async (req, res) => {
+app.post('/api/orders/:id/accept', auth, requireOpen(), wrap(async (req, res) => {
   if (!ObjectId.isValid(req.params.id)) return bad(res, 'Bad order');
   const o = await col('orders').findOneAndDelete({ _id: new ObjectId(req.params.id) });
   if (!o) return bad(res, 'Order already handled', 404);
@@ -286,6 +290,9 @@ app.post('/api/orders/:id/reject', auth, wrap(async (req, res) => {
 app.post('/api/day/open', auth, wrap(async (req, res) => {
   const float = Math.round(Number(req.body?.float));
   if (!(float >= 0 && float <= 1000000)) return bad(res, 'Enter the cash in the drawer');
+  const ds = await dayState();
+  if (ds.status === 'open') return bad(res, 'The cafe is already open');
+  if (ds.status === 'closed') return bad(res, 'The cafe was closed today. Only the owner can reopen it.');
   const day = dayKey(), now = Date.now();
   await col('openings').insertOne({ day, float, by: req.role, at: now });
   await col('settings').updateOne({ _id: 'cafe' }, { $set: { lastFloat: float } });
@@ -294,21 +301,34 @@ app.post('/api/day/open', auth, wrap(async (req, res) => {
   res.json({ ok: true, float, at: now });
 }));
 
+// Owner only: reopen after closing (e.g. closed by mistake). The drawer starts from the cash counted at closing.
+app.post('/api/day/reopen', auth, ownerOnly, wrap(async (req, res) => {
+  const ds = await dayState();
+  if (ds.status !== 'closed') return bad(res, 'The cafe is not closed');
+  const now = Date.now();
+  await col('openings').insertOne({ day: dayKey(), float: ds.closing.counted, by: req.role, at: now, reopen: true });
+  await broadcast();
+  res.json({ ok: true, float: ds.closing.counted });
+}));
+
 /* ---------------- close the cafe for the day ---------------- */
 // Count the cash, record it, send the day report to the owner (phone + WhatsApp).
 app.post('/api/day/close', auth, wrap(async (req, res) => {
   const counted = Math.round(Number(req.body?.counted));
   // Opening cash comes from Open cafe this morning; if the cafe wasn't opened in the app, the screen asks for it.
-  const opened = await latestOpening(dayKey());
-  const float = opened ? opened.float : req.body?.float === '' || req.body?.float == null ? 0 : Math.round(Number(req.body.float));
+  const ds = await dayState();
+  if (ds.status !== 'open') return bad(res, ds.status === 'closed' ? 'The cafe is already closed' : 'The cafe is not open yet');
+  const opened = ds.opening;
+  const float = opened.float;
   if (!(counted >= 0 && counted <= 10000000)) return bad(res, 'Enter the cash in the drawer');
   if (!(float >= 0 && float <= 1000000)) return bad(res, 'Bad opening cash');
   const note = String(req.body?.note || '').trim().slice(0, 200);
   const day = dayKey();
   const sales = await col('sales').find({ day }).toArray();
   const sum = summarize(sales);
-  const expected = float + sum.cash;
-  const closing = { day, counted, float, expected, diff: counted - expected, note, by: req.role, at: Date.now(), openedAt: opened?.at || null, openedBy: opened?.by || null, total: sum.total, upi: sum.upi, cash: sum.cash, bills: sum.bills };
+  const cashSales = await cashSince(day, opened.at);
+  const expected = float + cashSales;
+  const closing = { day, counted, float, expected, cashSales, diff: counted - expected, note, by: req.role, at: Date.now(), openedAt: opened?.at || null, openedBy: opened?.by || null, total: sum.total, upi: sum.upi, cash: sum.cash, bills: sum.bills };
   await col('closings').insertOne(closing);
   await col('settings').updateOne({ _id: 'cafe' }, { $set: { lastReport: day, lastFloat: float } });
   await broadcast();
@@ -352,6 +372,24 @@ app.post('/api/push/test', auth, ownerOnly, wrap(async (req, res) => {
 }));
 
 /* ---------------- owner: report ---------------- */
+// Day status: 'not-open' (morning, before Open cafe) → 'open' → 'closed' (after Close cafe; owner can reopen).
+async function dayState(day = dayKey()) {
+  const [opening, closing] = await Promise.all([latestOpening(day), latestClosing(day)]);
+  const status = opening && (!closing || opening.at > closing.at) ? 'open' : closing ? 'closed' : 'not-open';
+  return { status, opening, closing };
+}
+// Billing, QR orders and settling only work while the cafe is open.
+function requireOpen(customer = false) {
+  return (req, res, next) => dayState().then((ds) => {
+    if (ds.status === 'open') return next();
+    if (customer) return bad(res, 'Sorry, the cafe is closed right now.', 423);
+    bad(res, ds.status === 'closed' ? 'The cafe is closed for today.' + (req.role === 'owner' ? ' Reopen it to bill again.' : ' Ask the owner to reopen.') : 'Open the cafe first (Open cafe on the Tables screen).', 423);
+  }, next);
+}
+async function cashSince(day, at) {
+  const [a] = await col('sales').aggregate([{ $match: { day, method: 'Cash', at: { $gte: at } } }, { $group: { _id: null, cash: { $sum: '$total' } } }]).toArray();
+  return a?.cash || 0;
+}
 const latestOpening = (day) => col('openings').find({ day }).sort({ at: -1 }).limit(1).next();
 const latestClosing = (day) => col('closings').find({ day }).sort({ at: -1 }).limit(1).next();
 async function buildReport(day) {

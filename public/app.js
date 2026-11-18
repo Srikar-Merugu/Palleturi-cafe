@@ -295,17 +295,34 @@ let dayBusy = false;
 const todayLong = () => new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
 const diffText = d => d === 0 ? 'Matches ✓' : d < 0 ? rs(-d) + ' short' : '+' + rs(d) + ' extra';
 
+function dayLock() {
+  if (S.dayStatus === 'open') return '';
+  const closed = S.dayStatus === 'closed';
+  return `<div class="lock-note">${ico('lock', 20)}<div class="txt"><b>${closed ? 'Cafe is closed for today' : 'Cafe is not open yet'}</b>
+    <div class="sub">${closed ? (role === 'owner' ? 'Billing is locked. Reopen the cafe to add items or settle bills.' : 'Billing is locked. Ask the owner to reopen the cafe.') : 'Open the cafe on the Tables screen to start billing.'}</div></div>
+    ${closed && role === 'owner' ? `<button class="btn gold small" data-act="reopen-day">Reopen</button>` : !closed ? `<a class="btn gold small" href="#/">Go to Tables</a>` : ''}</div>`;
+}
+const lockMsg = () => S.dayStatus === 'closed' ? (role === 'owner' ? 'Cafe is closed. Reopen it to bill again.' : 'Cafe is closed. Ask the owner to reopen.') : 'Open the cafe first (Tables → Open cafe).';
+function openReopen() {
+  const c = S.closing; if (!c) return;
+  $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left" role="dialog" aria-label="Reopen cafe">
+    <div class="day-head sun">${ico('sun', 26)}<div><h1>Reopen cafe?</h1><div class="sub">Closed at ${timeStr(new Date(c.at))} by ${c.by}</div></div></div>
+    <p class="sub" style="margin:0 0 10px">Billing and QR orders start again. When you close again, tonight’s cash check continues from the <b style="color:var(--text)">${rs(c.counted)}</b> counted at closing.</p>
+    <div class="row" style="margin-top:16px"><button class="btn ghost" data-act="close-modal">Cancel</button><button class="btn gold" data-act="reopen-go">${ico('sun', 18)} Reopen cafe</button></div>
+  </div></div>`;
+}
 function dayButton() {
-  if (!S.opening && !S.closing) return ''; // the morning banner has the Open cafe button
-  return `<button class="btn close-btn" data-act="close-day">${ico('power', 18)} Close cafe</button>`;
+  if (S.dayStatus === 'open') return `<button class="btn close-btn" data-act="close-day">${ico('power', 18)} Close cafe</button>`;
+  if (S.dayStatus === 'closed' && role === 'owner') return `<button class="btn gold" data-act="reopen-day">${ico('sun', 18)} Reopen cafe</button>`;
+  return ''; // not open yet: the morning banner has the Open cafe button
 }
 function dayBanner() {
   const o = S.opening, c = S.closing;
-  if (c) {
+  if (S.dayStatus === 'closed' && c) {
     const d = c.diff;
-    return `<div class="day-banner closed">${ico('power', 20)}<div><b>Closed today at ${timeStr(new Date(c.at))}</b> by ${c.by} · cash ${rs(c.counted)}${d === undefined ? '' : ` · <span class="${d < 0 ? 'neg' : ''}">${diffText(d)}</span>`}</div></div>`;
+    return `<div class="day-banner closed">${ico('power', 20)}<div><b>Cafe closed today at ${timeStr(new Date(c.at))}</b> by ${c.by} · cash ${rs(c.counted)}${d === undefined ? '' : ` · <span class="${d < 0 ? 'neg' : ''}">${diffText(d)}</span>`}<div class="sub">Billing and QR orders are locked${role === 'owner' ? ' until you reopen.' : '. Ask the owner to reopen if needed.'}</div></div></div>`;
   }
-  if (o) return `<div class="day-banner open">${ico('sun', 20)}<div><b>Open since ${timeStr(new Date(o.at))}</b> · opening cash ${rs(o.float)} · by ${o.by}</div></div>`;
+  if (S.dayStatus === 'open' && o) return `<div class="day-banner open">${ico('sun', 20)}<div><b>${o.reopen ? 'Reopened' : 'Open since'} ${o.reopen ? 'at ' : ''}${timeStr(new Date(o.at))}</b> · ${o.reopen ? 'cash in drawer' : 'opening cash'} ${rs(o.float)} · by ${o.by}</div></div>`;
   return `<div class="day-banner start">${ico('sun', 24)}<div class="txt"><b>Good morning! Open the cafe to start the day</b><div class="sub">Count the change in the cash drawer — tonight’s cash check uses it.</div></div>
     <button class="btn gold" data-act="open-day">Open cafe</button></div>`;
 }
@@ -347,7 +364,7 @@ function openCloseDay() {
         <div><span>Cash sales</span><b>${rs(S.today.cash)}</b></div>
         <div><span>Bills</span><b>${S.today.bills}</b></div>
       </div>` : ''}
-    ${o ? `<div class="kv">${ico('sun', 16)}<span>Morning cash</span><b>${rs(o.float)}</b><small>opened ${timeStr(new Date(o.at))}</small></div>`
+    ${o ? `<div class="kv">${ico('sun', 16)}<span>${o.reopen ? 'Cash at reopen' : 'Morning cash'}</span><b>${rs(o.float)}</b><small>opened ${timeStr(new Date(o.at))}</small></div>`
       : `<div class="field"><label for="cl-float">Cash in the drawer this morning <small>(cafe wasn’t opened in the app today)</small></label>
           <div class="money sm"><span>₹</span><input id="cl-float" inputmode="numeric" placeholder="0" value="${S.settings.lastFloat || ''}"></div></div>`}
     <label class="big-label" for="cl-cash">How much cash is in the drawer now?</label>
@@ -360,7 +377,7 @@ function openCloseDay() {
   $('#cl-cash').focus();
 }
 function closeFloat() { return S.opening ? S.opening.float : parseInt(($('#cl-float')?.value || '').replace(/\D/g, ''), 10) || 0; }
-function closeExpected() { return closeFloat() + (S.today ? S.today.cash : 0); }
+function closeExpected() { return closeFloat() + (S.today ? (S.today.cashSinceOpen ?? S.today.cash) : 0); }
 function closeDiff() {
   const raw = ($('#cl-cash')?.value || '').replace(/\D/g, '');
   $('#cl-go').disabled = raw === '';
@@ -661,7 +678,8 @@ function viewTable(t) {
     <button class="paybtn upi" data-act="pay-open" data-m="UPI" data-t="${t}" ${total ? '' : 'disabled'}>${ico('qr', 20)} UPI</button>
     <button class="paybtn cash" data-act="pay-open" data-m="Cash" data-t="${t}" ${total ? '' : 'disabled'}>${ico('cash', 20)} Cash</button>`;
   return `
-    <div class="pos">
+    ${dayLock()}
+    <div class="pos ${S.dayStatus !== 'open' ? 'locked' : ''}">
       <section>
         <div class="pos-head">
           <a class="back" href="#/" aria-label="Back to tables">${ico('back', 20)}</a>
@@ -816,13 +834,14 @@ function renderMenu(t) {
         <button class="c-lang" data-act="m-lang">${lang === 'te' ? 'English' : 'తెలుగు'}</button>
         <div class="over"><img src="assets/logo.png" alt="Palleturi Cafe"><span class="tbl">${tlabel}</span></div>
       </header>
+      ${M.open ? '' : `<div class="c-closed">${lang === 'te' ? 'కేఫ్ ఇప్పుడు మూసివేయబడింది. మెనూ చూడవచ్చు, ఆర్డర్ చేయలేరు.' : 'The cafe is closed right now. You can look at the menu, but ordering is off.'}</div>`}
       <nav class="c-cats">${cats.map(c => `<a href="#" data-act="m-jump" data-cat="${c.id}">${lang === 'te' ? c.te : c.name}</a>`).join('')}</nav>
       ${cats.map(c => `<section class="c-sec" id="sec-${c.id}"><h2 class="serif">${lang === 'te' ? c.te : c.name}</h2>
         ${c.items.map(i => `<div class="c-item"><div class="info"><div class="nm">${esc(nm(i))}</div>${sub(i) ? `<div class="te">${esc(sub(i))}</div>` : ''}<div class="pr">${rs(i.price)}</div></div>
-          ${cart[i.id] ? `<span class="stepper"><button data-act="m-dec" data-id="${i.id}" aria-label="Remove one">−</button><span>${cart[i.id]}</span><button data-act="m-add" data-id="${i.id}" aria-label="Add one">+</button></span>`
+          ${!M.open ? '' : cart[i.id] ? `<span class="stepper"><button data-act="m-dec" data-id="${i.id}" aria-label="Remove one">−</button><span>${cart[i.id]}</span><button data-act="m-add" data-id="${i.id}" aria-label="Add one">+</button></span>`
           : `<button class="c-add" data-act="m-add" data-id="${i.id}">${L.add}</button>`}</div>`).join('')}
       </section>`).join('')}
-      ${count ? `<div class="c-bar"><div class="sum">${count} ${L.items} · <b>${rs(total)}</b></div><button class="btn gold" data-act="m-send" data-t="${t}" ${sending ? 'disabled' : ''}>${sending ? L.sending : L.send}</button></div>` : ''}
+      ${count && M.open ? `<div class="c-bar"><div class="sum">${count} ${L.items} · <b>${rs(total)}</b></div><button class="btn gold" data-act="m-send" data-t="${t}" ${sending ? 'disabled' : ''}>${sending ? L.sending : L.send}</button></div>` : ''}
     </div>`;
   window.scrollTo(0, y);
 }
@@ -957,6 +976,7 @@ document.addEventListener('click', async e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   const a = el.dataset.act, t = el.dataset.t !== undefined ? +el.dataset.t : null;
   if (a === 'close-modal') { if (e.target === el) closeModal(); return; }
+  if (S && role && S.dayStatus !== 'open' && ['add', 'dec', 'clear', 'pay-open', 'send', 'accept'].includes(a)) return toast(lockMsg());
   switch (a) {
     case 'pin': return pressPin(el.dataset.k);
     case 'logout': return logout();
@@ -981,6 +1001,8 @@ document.addEventListener('click', async e => {
     case 'stk-count-save': { const actual = ($('#stk-actual').value || '').replace(/\D/g, ''); if (actual === '') return; return stockSave(`/api/stock/${el.dataset.id}/count`, { actual: +actual }, r => r.diff === null ? 'Count saved' : r.diff === 0 ? 'Count matches ✓' : r.diff < 0 ? `Count saved · ${-r.diff} missing` : `Count saved · ${r.diff} extra`); }
     case 'stk-remove-save': { const qty = numIn('stk-rm'); if (!qty) return toast('Enter how many'); const reason = $('#stk-reason .on')?.dataset.r || 'other'; return stockSave(`/api/stock/${el.dataset.id}/remove`, { qty, reason }, r => `Removed ${qty} · now ${r.stock} in stock`); }
     case 'open-day': return openOpenDay();
+    case 'reopen-day': return openReopen();
+    case 'reopen-go': { const r = await op(() => api('/api/day/reopen', { method: 'POST' })); if (r) { closeModal(); toast(`Cafe reopened · ${rs(r.float)} in the drawer`); } return; }
     case 'open-day-go': return openDayGo();
     case 'close-day': return openCloseDay();
     case 'close-day-go': return closeDayGo();
@@ -1047,7 +1069,7 @@ let snoozeUntil = 0;
 setInterval(() => {
   document.querySelectorAll('.clock').forEach(c => { c.textContent = timeStr(new Date()); });
   document.querySelectorAll('[data-since]').forEach(el => { const s = ago(+el.dataset.since); el.textContent = el.closest('.when') ? s + ' ago' : s; });
-  if (role === 'owner' && S && new Date().getHours() >= S.reportHour && S.settings.lastReport !== dayKey() && Date.now() > snoozeUntil && !$('#modal').innerHTML) {
+  if (role === 'owner' && S && S.dayStatus === 'open' && new Date().getHours() >= S.reportHour && S.settings.lastReport !== dayKey() && Date.now() > snoozeUntil && !$('#modal').innerHTML) {
     $('#modal').innerHTML = `<div class="overlay"><div class="sheet">
       <h1>It’s ${hourLabel(S.reportHour)}</h1><p class="sub">Time to count the cash and close the cafe. The report goes to the owner.</p>
       <div class="row" style="margin-top:16px"><button class="btn ghost" id="later">Later</button>

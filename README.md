@@ -86,6 +86,11 @@ alerts on this phone** (on iPhone, first Share → Add to Home Screen). Needs th
 
 ## Open cafe (morning) and Close cafe (night)
 
+The day has three states, enforced by the server: **not open** (morning) → **open** →
+**closed**. Billing, Send order, settling and QR orders only work while open. After
+closing, only the owner can **Reopen cafe**; the next cash check continues from the
+amount counted at closing.
+
 **Morning — Open cafe** (banner on Tables): asks how much cash is in the drawer and
 notifies the owner. **Night — Close cafe**: shows open tables / QR orders, shows the
 morning cash, asks only for the cash in the drawer now (expected = morning cash + cash
