@@ -6,7 +6,8 @@ cafe's brand (signboard brown `#8C5862` + marigold logo `#F5A91B`).
 - **Front end:** plain HTML/CSS/JS in `public/`
 - **Server:** Node.js + Express in `server/`
 - **Database:** MongoDB (local or MongoDB Atlas)
-- **Live updates:** new QR orders reach the counter instantly (Server-Sent Events)
+- **Live updates:** the counter screen checks for changes every 3 seconds and beeps on new QR orders
+- **Hosting:** Vercel (`api/index.js` + `vercel.json`), or any Node host with `npm start`
 
 ## Run locally
 
@@ -48,13 +49,16 @@ them in **Settings**.
 | `sales` | Settled bills, with a `day` field (`YYYY-MM-DD`, cafe time) for reports |
 | `settings` | UPI ID, WhatsApp number, PINs |
 | `sessions` | Login tokens (expire after 30 days) |
+| `attempts` | Wrong PIN tries, for the 5-minute lockout |
 
-## Going live
+## Going live (Vercel + MongoDB Atlas)
 
-1. Create a free cluster on **MongoDB Atlas**, make a database user, allow network
-   access, and copy the `mongodb+srv://…` connection string into `MONGODB_URI`.
-2. Host the Node server somewhere that keeps it running (Render, Railway, a VPS).
-   Set the same environment variables there. Start command: `npm start`.
+1. Create a free M0 cluster on **MongoDB Atlas**, a database user, and allow
+   network access from `0.0.0.0/0` (Vercel has no fixed IPs). Copy the
+   `mongodb+srv://…` connection string.
+2. Import the GitHub repo into **Vercel** (no build step needed) and set
+   environment variables: `MONGODB_URI`, `MONGODB_DB`, `CRON_SECRET` (any long
+   random string), plus the optional WhatsApp ones.
 3. Print the stickers from **QR stickers** *after* deploying, so the codes point
    at the live address.
 
@@ -64,5 +68,6 @@ them in **Settings**.
   opens WhatsApp with it already typed.
 - **Automatic:** set `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID` and `WHATSAPP_TEMPLATE`
   (Meta WhatsApp Business Cloud API). The server sends the report itself at
-  `REPORT_HOUR`. WhatsApp only lets a business start a chat with an approved
+  `REPORT_HOUR` (on Vercel: the cron in `vercel.json`, 17:00 UTC = 10:30 PM IST; the
+  free plan may run it any time within that hour). WhatsApp only lets a business start a chat with an approved
   template, so create one with a single body variable `{{1}}`.

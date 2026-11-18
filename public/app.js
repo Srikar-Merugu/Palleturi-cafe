@@ -76,7 +76,10 @@ async function refresh() {
   if (inflight || refreshing) { refreshAgain = true; return; }
   refreshing = true;
   try {
+    const before = S ? new Set(S.pending.map(o => o.id)) : null;
     S = await api('/api/state'); role = S.role;
+    const fresh = before ? S.pending.filter(o => !before.has(o.id) && !handled.has(o.id)) : [];
+    if (fresh.length) { beep(); fresh.forEach(o => toast(`New order from ${tname(o.table)}`)); }
     if (parts()[0] === 'report' && role === 'owner') R = await api('/api/report');
     if (!$('#modal').innerHTML) render();
   } catch (e) { if (token) toast(e.message); }
@@ -91,18 +94,23 @@ async function op(fn) {
   finally { inflight--; if (!inflight) refresh(); }
 }
 
-let es = null;
+// Live updates: ask the server every 3 s whether anything changed (one tiny request),
+// and reload the full state only when it did.
+const handled = new Set();   // QR orders this screen accepted/rejected itself (no beep)
+let pollTimer = null, lastRev = null;
 function connectEvents() {
-  if (es) es.close();
-  es = new EventSource('/api/events?token=' + encodeURIComponent(token));
-  es.addEventListener('order', e => {
-    const d = JSON.parse(e.data || '{}');
-    beep(); toast(`New order from ${tname(d.table)}`);
-    refresh();
-  });
-  es.addEventListener('change', () => refresh());
-  es.onopen = () => refresh(); // catch up after a reconnect
+  clearInterval(pollTimer);
+  lastRev = null;
+  pollTimer = setInterval(async () => {
+    if (!token || inflight) return;
+    try {
+      const { rev } = await api('/api/rev');
+      if (lastRev !== null && rev !== lastRev) refresh();
+      lastRev = rev;
+    } catch (e) {}
+  }, 3000);
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && token) refresh(); });
 
 /* ---------------- routing ---------------- */
 function parts() { return (location.hash.slice(1) || '/').split('/').filter(Boolean); }
@@ -182,7 +190,7 @@ function logout(expired) {
   if (!expired && token) api('/api/logout', { method: 'POST' }).catch(() => {});
   token = null; role = null; S = null; R = null;
   try { localStorage.removeItem('palleturi.token'); } catch (e) {}
-  if (es) { es.close(); es = null; }
+  clearInterval(pollTimer); pollTimer = null;
   location.hash = '#/'; render();
 }
 
@@ -302,11 +310,13 @@ function closeModal() { $('#modal').innerHTML = ''; }
 
 /* ---------------- QR orders ---------------- */
 async function accept(oid) {
+  handled.add(oid);
   S.pending = S.pending.filter(o => o.id !== oid); render();
   const r = await op(() => api(`/api/orders/${oid}/accept`, { method: 'POST' }));
   if (r) toast(`Added to ${tname(r.table)}`);
 }
 async function reject(oid) {
+  handled.add(oid);
   S.pending = S.pending.filter(o => o.id !== oid); render();
   const r = await op(() => api(`/api/orders/${oid}/reject`, { method: 'POST' }));
   if (r) toast('Order rejected');
