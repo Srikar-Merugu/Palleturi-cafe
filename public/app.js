@@ -77,7 +77,7 @@ async function refresh() {
   refreshing = true;
   try {
     const before = S ? new Set(S.pending.map(o => o.id)) : null;
-    S = await api('/api/state'); role = S.role;
+    S = await api('/api/state'); role = S.role; lastRev = S.rev;
     const fresh = before ? S.pending.filter(o => !before.has(o.id) && !handled.has(o.id)) : [];
     if (fresh.length) { beep(); fresh.forEach(o => toast(`New order from ${tname(o.table)}`)); }
     if (parts()[0] === 'report' && role === 'owner') R = await api('/api/report');
@@ -100,13 +100,11 @@ const handled = new Set();   // QR orders this screen accepted/rejected itself (
 let pollTimer = null, lastRev = null;
 function connectEvents() {
   clearInterval(pollTimer);
-  lastRev = null;
   pollTimer = setInterval(async () => {
-    if (!token || inflight) return;
+    if (!token || inflight || refreshing) return;
     try {
       const { rev } = await api('/api/rev');
-      if (lastRev !== null && rev !== lastRev) refresh();
-      lastRev = rev;
+      if (rev !== lastRev) refresh(); // refresh() stores the new counter
     } catch (e) {}
   }, 3000);
 }

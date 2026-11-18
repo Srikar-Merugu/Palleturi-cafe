@@ -135,13 +135,17 @@ app.get('/api/rev', auth, wrap(async (req, res) => {
 }));
 
 app.get('/api/state', auth, wrap(async (req, res) => {
-  const [items, tables, orders, st] = await Promise.all([getItems(), col('tables').find().toArray(), col('orders').find().sort({ at: 1 }).toArray(), getSettings()]);
+  // Read settings (and its change counter) first: if something changes while we read
+  // the rest, the screen sees a newer counter on its next check and reloads again.
+  const st = await getSettings();
+  const [items, tables, orders] = await Promise.all([getItems(), col('tables').find().toArray(), col('orders').find().sort({ at: 1 }).toArray()]);
   const settings = { upi: st.upi, wa: st.wa, lastReport: st.lastReport, waAuto: whatsappConfigured() };
   if (req.role === 'owner') Object.assign(settings, { ownerPin: st.ownerPin, staffPin: st.staffPin });
   res.json({
     role: req.role,
     tableCount: TABLE_COUNT,
     reportHour: REPORT_HOUR,
+    rev: st.rev || 0,
     cats: CATS,
     items: items.map(itemOut),
     tables: Object.fromEntries(tables.map((t) => [t._id, { lines: t.lines, opened: t.opened }])),
