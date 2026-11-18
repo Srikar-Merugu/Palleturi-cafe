@@ -79,8 +79,18 @@ h1 { font-size: 22px; } h2 { font-size: 17px; color: var(--gold); }
 .item { position: relative; text-align: left; background: var(--s1); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-height: 86px; display: flex; flex-direction: column; justify-content: space-between; transition: transform .1s, background .1s; }
 .item:active { transform: scale(.96); background: var(--s2); }
 .item .nm { font-weight: 500; line-height: 1.25; }
+.item .foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .item .pr { color: var(--gold); font-weight: 700; }
-.item .q { position: absolute; top: -7px; right: -7px; background: var(--gold); color: var(--gold-ink); border-radius: 999px; min-width: 26px; height: 26px; display: grid; place-items: center; font-weight: 700; font-size: 14px; padding: 0 6px; }
+.item .q { background: var(--gold); color: var(--gold-ink); border-radius: 999px; padding: 3px 10px; font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+/* Selected: item is on the bill */
+.item.sel { background: linear-gradient(160deg, rgba(245,169,27,.22), rgba(245,169,27,.07)); border: 2px solid var(--gold); padding: 13px; box-shadow: 0 6px 18px rgba(245,169,27,.12); }
+.item.sel .nm { color: var(--cream); font-weight: 700; }
+.item.sel .pr { color: var(--cream); opacity: .85; }
+.item.sel:active { background: linear-gradient(160deg, rgba(245,169,27,.3), rgba(245,169,27,.12)); }
+.item.bump { animation: bump .32s ease-out; }
+@keyframes bump { 0% { transform: scale(.93); } 60% { transform: scale(1.03); } 100% { transform: scale(1); } }
+.cats .cnt { display: inline-grid; place-items: center; min-width: 20px; height: 20px; margin-left: 8px; padding: 0 6px; border-radius: 10px; background: var(--gold); color: var(--gold-ink); font-size: 12px; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .item.bump { animation: none; } }
 .bill { background: var(--s1); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; position: sticky; top: 84px; }
 .bill .empty { color: var(--muted); padding: 22px 0; text-align: center; }
 .line { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--line); }

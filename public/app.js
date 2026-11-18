@@ -247,11 +247,14 @@ function viewTable(t) {
       <button class="btn small gold" data-act="accept" data-oid="${o.id}">Accept</button></div>`).join('')}
     <div class="pos">
       <section>
-        <div class="cats">${S.cats.map(c => `<button data-act="cat" data-cat="${c.id}" class="${posCat === c.id ? 'on' : ''}">${c.name}</button>`).join('')}</div>
+        <div class="cats">${S.cats.map(c => {
+          const n = S.items.filter(i => i.cat === c.id).reduce((a, i) => a + (lines[i.id] || 0), 0);
+          return `<button data-act="cat" data-cat="${c.id}" class="${posCat === c.id ? 'on' : ''}">${c.name}${n ? `<span class="cnt">${n}</span>` : ''}</button>`;
+        }).join('')}</div>
         <div class="items">${items.map(i => `
-          <button class="item" data-act="add" data-t="${t}" data-id="${i.id}">
-            ${lines[i.id] ? `<span class="q">${lines[i.id]}</span>` : ''}
-            <span class="nm">${esc(i.name)}</span><span class="pr">${rs(i.price)}</span>
+          <button class="item ${lines[i.id] ? 'sel' : ''} ${bumpId === i.id ? 'bump' : ''}" data-act="add" data-t="${t}" data-id="${i.id}" aria-label="Add ${esc(i.name)}${lines[i.id] ? `, ${lines[i.id]} on bill` : ''}">
+            <span class="nm">${esc(i.name)}</span>
+            <span class="foot"><span class="pr">${rs(i.price)}</span>${lines[i.id] ? `<span class="q">× ${lines[i.id]}</span>` : ''}</span>
           </button>`).join('')}</div>
       </section>
       <aside class="bill" id="bill">
@@ -271,7 +274,11 @@ function viewTable(t) {
       <a class="btn ghost small" href="#bill" style="color:var(--cream);border-color:rgba(255,241,220,.4)">View bill</a>
       <button class="btn gold" data-act="settle" data-t="${t}">Settle</button></div>`;
 }
+let bumpId = null, bumpTimer = null;
 function addLine(t, id, d) {
+  // Tap feedback: the tapped card plays a short bounce (cleared so later re-renders don't replay it).
+  bumpId = d > 0 ? id : null;
+  clearTimeout(bumpTimer); bumpTimer = setTimeout(() => { bumpId = null; }, 400);
   // Optimistic: update the screen now, then tell the server.
   const tb = S.tables[t] || (S.tables[t] = { lines: {}, opened: Date.now() });
   tb.lines[id] = Math.max(0, (tb.lines[id] || 0) + d);
