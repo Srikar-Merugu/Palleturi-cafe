@@ -33,6 +33,7 @@ async function setup() {
   await col('sales').createIndex({ day: 1 });
   await col('orders').createIndex({ at: 1 });
   await col('order_log').createIndex({ day: 1 });
+  await col('closings').createIndex({ day: 1, at: -1 });
   if (!(await col('items').countDocuments())) await col('items').insertMany(DEFAULT_ITEMS);
   await stockApi.migrate();
   await col('stock_moves').createIndex({ item: 1, at: -1 });
@@ -169,13 +170,16 @@ app.get('/api/state', auth, wrap(async (req, res) => {
   // the rest, the screen sees a newer counter on its next check and reloads again.
   const st = await getSettings();
   const [items, tables, orders] = await Promise.all([getItems(), col('tables').find().toArray(), col('orders').find().sort({ at: 1 }).toArray()]);
-  const settings = { upi: st.upi, wa: st.wa, lastReport: st.lastReport, waAuto: whatsappConfigured() };
+  const settings = { upi: st.upi, wa: st.wa, lastReport: st.lastReport, waAuto: whatsappConfigured(), lastFloat: st.lastFloat || 0 };
+  // Today's closing, if the cafe was closed (difference only for the owner: staff count "blind").
+  const c = await latestClosing(dayKey());
+  const closing = c ? { at: c.at, counted: c.counted, by: c.by, ...(req.role === 'owner' ? { diff: c.diff, expected: c.expected } : {}) } : null;
   if (req.role === 'owner') Object.assign(settings, { ownerPin: st.ownerPin, staffPin: st.staffPin });
   // Today's takings, owner only (staff don't see revenue).
   let today = null;
   if (req.role === 'owner') {
-    const [agg] = await col('sales').aggregate([{ $match: { day: dayKey() } }, { $group: { _id: null, total: { $sum: '$total' }, bills: { $sum: 1 } } }]).toArray();
-    today = { total: agg?.total || 0, bills: agg?.bills || 0 };
+    const [agg] = await col('sales').aggregate([{ $match: { day: dayKey() } }, { $group: { _id: null, total: { $sum: '$total' }, bills: { $sum: 1 }, cash: { $sum: { $cond: [{ $eq: ['$method', 'Cash'] }, '$total', 0] } }, upi: { $sum: { $cond: [{ $eq: ['$method', 'UPI'] }, '$total', 0] } } } }]).toArray();
+    today = { total: agg?.total || 0, bills: agg?.bills || 0, cash: agg?.cash || 0, upi: agg?.upi || 0 };
   }
   res.json({
     role: req.role,
@@ -183,6 +187,7 @@ app.get('/api/state', auth, wrap(async (req, res) => {
     reportHour: REPORT_HOUR,
     rev: st.rev || 0,
     today,
+    closing,
     cats: CATS,
     items: items.map(itemOut),
     tables: Object.fromEntries(tables.map((t) => [t._id, { lines: t.lines, sent: t.sent || {}, opened: t.opened }])),
@@ -274,6 +279,42 @@ app.post('/api/orders/:id/reject', auth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/* ---------------- close the cafe for the day ---------------- */
+// Count the cash, record it, send the day report to the owner (phone + WhatsApp).
+app.post('/api/day/close', auth, wrap(async (req, res) => {
+  const counted = Math.round(Number(req.body?.counted));
+  const float = req.body?.float === '' || req.body?.float == null ? 0 : Math.round(Number(req.body.float));
+  if (!(counted >= 0 && counted <= 10000000)) return bad(res, 'Enter the cash in the drawer');
+  if (!(float >= 0 && float <= 1000000)) return bad(res, 'Bad opening cash');
+  const note = String(req.body?.note || '').trim().slice(0, 200);
+  const day = dayKey();
+  const sales = await col('sales').find({ day }).toArray();
+  const sum = summarize(sales);
+  const expected = float + sum.cash;
+  const closing = { day, counted, float, expected, diff: counted - expected, note, by: req.role, at: Date.now(), total: sum.total, upi: sum.upi, cash: sum.cash, bills: sum.bills };
+  await col('closings').insertOne(closing);
+  await col('settings').updateOne({ _id: 'cafe' }, { $set: { lastReport: day, lastFloat: float } });
+  await broadcast();
+  const [rep, st] = await Promise.all([buildReport(day), getSettings()]);
+  const d = closing.diff;
+  await notifyOwners(col, {
+    title: `🔒 Cafe closed · ${rs(sum.total)} today`,
+    body: `Cash ${rs(counted)} (${d === 0 ? 'matches' : d < 0 ? rs(-d) + ' short' : rs(d) + ' extra'}) · UPI ${rs(sum.upi)} · ${sum.bills} bills`,
+    url: '/#/report', tag: 'closed-' + day,
+  });
+  let waSent = false;
+  if (whatsappConfigured()) {
+    const w = await sendWhatsApp(st.wa, rep.text);
+    waSent = w.sent;
+    if (waSent) await col('settings').updateOne({ _id: 'cafe' }, { $set: { lastAutoReport: day } });
+  }
+  res.json({
+    ok: true, waSent, text: rep.text, link: `https://wa.me/${st.wa}?text=${encodeURIComponent(rep.text)}`,
+    counted, openTables: rep.open,
+    ...(req.role === 'owner' ? { expected, diff: closing.diff, total: sum.total, upi: sum.upi, cash: sum.cash, bills: sum.bills } : {}),
+  });
+}));
+
 /* ---------------- owner: phone notifications ---------------- */
 app.post('/api/push/subscribe', auth, ownerOnly, wrap(async (req, res) => {
   const sub = req.body?.sub;
@@ -294,11 +335,12 @@ app.post('/api/push/test', auth, ownerOnly, wrap(async (req, res) => {
 }));
 
 /* ---------------- owner: report ---------------- */
+const latestClosing = (day) => col('closings').find({ day }).sort({ at: -1 }).limit(1).next();
 async function buildReport(day) {
   const [sales, open] = await Promise.all([col('sales').find({ day }).toArray(), col('tables').countDocuments()]);
   const r = summarize(sales);
-  const low = await stockApi.lowStockList();
-  return { day, ...r, open, low, text: reportText(r, day, open, low) };
+  const [low, closing] = await Promise.all([stockApi.lowStockList(), latestClosing(day)]);
+  return { day, ...r, open, low, closing, text: reportText(r, day, open, low, closing) };
 }
 
 app.get('/api/report', auth, ownerOnly, wrap(async (req, res) => {
@@ -375,7 +417,7 @@ app.post('/api/demo/seed', auth, ownerOnly, wrap(async (req, res) => {
 }));
 
 app.post('/api/reset', auth, ownerOnly, wrap(async (req, res) => {
-  await Promise.all([col('sales').deleteMany({}), col('tables').deleteMany({}), col('orders').deleteMany({}), col('order_log').deleteMany({})]);
+  await Promise.all([col('sales').deleteMany({}), col('tables').deleteMany({}), col('orders').deleteMany({}), col('order_log').deleteMany({}), col('closings').deleteMany({})]);
   await broadcast();
   res.json({ ok: true });
 }));

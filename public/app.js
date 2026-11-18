@@ -42,6 +42,7 @@ const ICONS = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   box: '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5v-9z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  power: '<path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/>',
   cup: '<path d="M4 9.5h12V14a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9.5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 3.5c-.8.9.8 1.6 0 2.5M12 3.5c-.8.9.8 1.6 0 2.5"/>',
   samosa: '<path d="M12 4 3.5 19h17L12 4z"/><path d="M8.5 15h7M10 11.5h4"/>',
   bottle: '<path d="M10 2.5h4V5l1.6 2.6V20a1.8 1.8 0 0 1-1.8 1.8h-3.6A1.8 1.8 0 0 1 8.4 20V7.6L10 5V2.5z"/><path d="M8.4 12h7.2M8.4 16h7.2"/>',
@@ -284,6 +285,75 @@ async function stockSave(path, body, msg) {
   closeModal(); toast(msg(r)); await loadStock(); render();
 }
 
+
+/* ---------------- close the cafe for the day ---------------- */
+// Owner sees expected cash and the difference live. Staff count "blind":
+// they only enter what's in the drawer; the owner gets the difference.
+let closeBusy = false;
+function openCloseDay() {
+  const open = Object.entries(S.tables).filter(([, t]) => linesCount(t.lines) > 0);
+  const openAmt = open.reduce((a, [, t]) => a + linesTotal(t.lines), 0);
+  const owner = role === 'owner' && S.today;
+  $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left" role="dialog" aria-label="Close cafe">
+    <div class="close-head">${ico('power', 26)}<div><h1>Close cafe for today</h1><div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div></div>
+    ${open.length ? `<div class="warn">${ico('bell', 18)}<div><b>${open.length} table${open.length === 1 ? '' : 's'} still open · ${rs(openAmt)}</b><div>${open.map(([k]) => tname(+k)).join(', ')} — settle or clear them first, or they won’t be in today’s sales.</div></div></div>` : ''}
+    ${S.pending.length ? `<div class="warn">${ico('bell', 18)}<div><b>${S.pending.length} QR order${S.pending.length === 1 ? '' : 's'} not accepted</b></div></div>` : ''}
+    ${owner ? `<div class="close-sum">
+        <div><span>Sales today</span><b>${rs(S.today.total)}</b></div>
+        <div><span>UPI</span><b>${rs(S.today.upi)}</b></div>
+        <div><span>Cash sales</span><b>${rs(S.today.cash)}</b></div>
+        <div><span>Bills</span><b>${S.today.bills}</b></div>
+      </div>` : ''}
+    <div class="field"><label for="cl-float">Opening cash (change kept in the drawer this morning)</label>
+      <div class="cash-in small"><span>₹</span><input id="cl-float" inputmode="numeric" value="${S.settings.lastFloat || ''}" placeholder="0"></div></div>
+    <div class="field"><label for="cl-cash"><b>Count the cash in the drawer now</b></label>
+      <div class="cash-in"><span>₹</span><input id="cl-cash" inputmode="numeric" placeholder="0" autocomplete="off"></div></div>
+    ${owner ? `<div class="change" id="cl-diff"><span>Expected ${rs((S.settings.lastFloat || 0) + S.today.cash)}</span><b>—</b></div>` : `<p class="sub" style="margin:-4px 0 14px">The owner will see if the cash matches.</p>`}
+    <div class="field"><label for="cl-note">Note (optional)</label><input id="cl-note" class="ipt" maxlength="200" placeholder="e.g. ₹100 given to milk vendor"></div>
+    <div class="row"><button class="btn ghost" data-act="close-modal">Cancel</button>
+      <button class="btn gold" id="cl-go" data-act="close-day-go" disabled>${ico('power', 18)} Close cafe</button></div>
+  </div></div>`;
+  $('#cl-cash').focus();
+}
+function closeDiff() {
+  const raw = ($('#cl-cash')?.value || '').replace(/\D/g, '');
+  $('#cl-go').disabled = raw === '';
+  const box = $('#cl-diff'); if (!box) return;
+  const float = parseInt(($('#cl-float').value || '').replace(/\D/g, ''), 10) || 0;
+  const expected = float + S.today.cash;
+  if (raw === '') { box.className = 'change'; box.innerHTML = `<span>Expected ${rs(expected)}</span><b>—</b>`; return; }
+  const d = parseInt(raw, 10) - expected;
+  box.className = 'change ' + (d < 0 ? 'short' : 'ok');
+  box.innerHTML = `<span>Expected ${rs(expected)}</span><b>${d === 0 ? 'Matches ✓' : d < 0 ? rs(-d) + ' short' : '+' + rs(d) + ' extra'}</b>`;
+}
+async function closeDayGo() {
+  if (closeBusy) return;
+  const counted = ($('#cl-cash').value || '').replace(/\D/g, '');
+  if (counted === '') return;
+  closeBusy = true; $('#cl-go').disabled = true; $('#cl-go').textContent = 'Closing…';
+  const r = await op(() => api('/api/day/close', { method: 'POST', body: { counted: +counted, float: ($('#cl-float').value || '').replace(/\D/g, ''), note: $('#cl-note').value } }));
+  closeBusy = false;
+  if (!r) { if ($('#cl-go')) { $('#cl-go').disabled = false; $('#cl-go').textContent = 'Close cafe'; } return; }
+  const d = r.diff;
+  $('#modal').innerHTML = `<div class="overlay"><div class="sheet" role="dialog" aria-label="Cafe closed">
+    <div class="done-ico">${ico('check', 34)}</div>
+    <h1>Cafe closed for today</h1>
+    ${r.total !== undefined ? `<div class="big">${rs(r.total)}</div>
+      <div class="close-sum c3"><div><span>Cash counted</span><b>${rs(r.counted)}</b></div><div><span>UPI</span><b>${rs(r.upi)}</b></div><div><span>Bills</span><b>${r.bills}</b></div></div>
+      <div class="change ${d < 0 ? 'short' : 'ok'}"><span>Cash vs expected ${rs(r.expected)}</span><b>${d === 0 ? 'Matches ✓' : d < 0 ? rs(-d) + ' short' : '+' + rs(d) + ' extra'}</b></div>`
+    : `<p class="sub" style="margin:8px 0 16px">Cash recorded: <b style="color:var(--text)">${rs(r.counted)}</b></p>`}
+    ${r.openTables ? `<p class="sub" style="color:var(--gold)">${r.openTables} table(s) were still open.</p>` : ''}
+    <p class="sub" style="margin:4px 0 14px">${ico('bell', 14)} Owner’s phone notified${r.waSent ? ' · report sent on WhatsApp ✓' : ''}</p>
+    ${r.waSent ? '' : `<a class="btn green block" href="${esc(r.link)}" target="_blank" rel="noopener" data-act="close-wa" style="margin-bottom:10px">${ico('send', 18)} Send report on WhatsApp</a>`}
+    <div class="row"><button class="btn ghost" data-act="close-done">Done</button><button class="btn" data-act="close-lock">${ico('lock', 16)} Lock counter</button></div>
+  </div></div>`;
+}
+function closedBanner() {
+  const c = S.closing; if (!c) return '';
+  const d = c.diff;
+  return `<div class="closed-banner">${ico('power', 20)}<div><b>Closed today at ${timeStr(new Date(c.at))}</b> by ${c.by} · cash ${rs(c.counted)}${d === undefined ? '' : ` · ${d === 0 ? 'matches ✓' : d < 0 ? `<span style="color:var(--red)">${rs(-d)} short</span>` : `${rs(d)} extra`}`}</div></div>`;
+}
+
 const ico = (name, size = 22) => `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
 function toast(msg) {
@@ -503,8 +573,10 @@ function viewTables() {
   return `
     <div class="page-head">
       <div><h1>Tables</h1><div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
-      <div class="legend"><span><i></i>Free</span><span><i class="busy"></i>Occupied</span><span><i class="ping"></i>New QR order</span><span><i class="late"></i>Open ${LATE_MIN}+ min</span></div>
+      <div class="head-r"><div class="legend"><span><i></i>Free</span><span><i class="busy"></i>Occupied</span><span><i class="ping"></i>New QR order</span><span><i class="late"></i>Open ${LATE_MIN}+ min</span></div>
+      <button class="btn close-btn" data-act="close-day">${ico('power', 18)} Close cafe</button></div>
     </div>
+    ${closedBanner()}
     ${pushBanner()}
     ${kpis}
     ${incoming}
@@ -866,6 +938,10 @@ document.addEventListener('click', async e => {
     case 'stk-in-save': { const qty = stockInTotal(); if (!qty) return; const bill = $('#stk-bill').value.trim(); return stockSave(`/api/stock/${el.dataset.id}/in`, { qty, billAmount: bill === '' ? null : bill, supplier: $('#stk-supplier').value }, r => `Added ${qty} · now ${r.stock} in stock`); }
     case 'stk-count-save': { const actual = ($('#stk-actual').value || '').replace(/\D/g, ''); if (actual === '') return; return stockSave(`/api/stock/${el.dataset.id}/count`, { actual: +actual }, r => r.diff === null ? 'Count saved' : r.diff === 0 ? 'Count matches ✓' : r.diff < 0 ? `Count saved · ${-r.diff} missing` : `Count saved · ${r.diff} extra`); }
     case 'stk-remove-save': { const qty = numIn('stk-rm'); if (!qty) return toast('Enter how many'); const reason = $('#stk-reason .on')?.dataset.r || 'other'; return stockSave(`/api/stock/${el.dataset.id}/remove`, { qty, reason }, r => `Removed ${qty} · now ${r.stock} in stock`); }
+    case 'close-day': return openCloseDay();
+    case 'close-day-go': return closeDayGo();
+    case 'close-done': closeModal(); return render();
+    case 'close-lock': closeModal(); return logout();
     case 'pay-open': return openPay(t, el.dataset.m);
     case 'cash-quick': $('#cash').value = el.dataset.v; return updateChange();
     case 'pay': return pay(t, el.dataset.m);
@@ -897,8 +973,10 @@ document.addEventListener('input', e => {
   else if (e.target.id === 'stk-search') { stockQ = e.target.value; render(); }
   else if (['stk-packs', 'stk-loose', 'stk-bill'].includes(e.target.id)) stockInTotal();
   else if (e.target.id === 'stk-actual') countDiff();
+  else if (e.target.id === 'cl-cash' || e.target.id === 'cl-float') closeDiff();
 });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && ['stk-actual', 'stk-loose', 'stk-packs', 'stk-supplier', 'stk-bill', 'stk-rm'].includes(e.target.id)) { const b = $('#stk-save') || $('[data-act=stk-remove-save]'); if (b && !b.disabled) b.click(); }
+  if (e.key === 'Enter' && e.target.id === 'cl-cash' && !$('#cl-go').disabled) $('#cl-go').click();
   if (e.key === 'Enter' && e.target.id === 'cash' && !$('#cash-done').disabled) $('#cash-done').click(); if (e.key === 'Escape' && $('#modal').innerHTML) closeModal(); });
 document.addEventListener('change', async e => {
   const el = e.target;
@@ -925,11 +1003,11 @@ setInterval(() => {
   document.querySelectorAll('[data-since]').forEach(el => { const s = ago(+el.dataset.since); el.textContent = el.closest('.when') ? s + ' ago' : s; });
   if (role === 'owner' && S && new Date().getHours() >= S.reportHour && S.settings.lastReport !== dayKey() && Date.now() > snoozeUntil && !$('#modal').innerHTML) {
     $('#modal').innerHTML = `<div class="overlay"><div class="sheet">
-      <h1>It’s ${hourLabel(S.reportHour)}</h1><p class="sub">Time to close the day and send today’s report to WhatsApp.</p>
+      <h1>It’s ${hourLabel(S.reportHour)}</h1><p class="sub">Time to count the cash and close the cafe. The report goes to the owner.</p>
       <div class="row" style="margin-top:16px"><button class="btn ghost" id="later">Later</button>
-      <button class="btn green" id="sendnow">Send report</button></div></div></div>`;
+      <button class="btn gold" id="sendnow">Close cafe</button></div></div></div>`;
     $('#later').onclick = () => { snoozeUntil = Date.now() + 30 * 60000; closeModal(); };
-    $('#sendnow').onclick = () => { closeModal(); snoozeUntil = Date.now() + 30 * 60000; sendReport(); };
+    $('#sendnow').onclick = () => { snoozeUntil = Date.now() + 30 * 60000; openCloseDay(); };
   }
 }, 20000);
 

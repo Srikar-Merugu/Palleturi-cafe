@@ -52,6 +52,7 @@ them in **Settings**.
 | `attempts` | Wrong PIN tries, for the 5-minute lockout |
 | `order_log` | Every order sent to the owner (staff "Send order" and QR orders) |
 | `push_subs` | Owner phones signed up for notifications |
+| `closings` | Each Close cafe: cash counted, expected, difference, note, who |
 | `stock_moves` | Every stock change: delivery, sale, shelf count, removal |
 
 ## Going live (Vercel + MongoDB Atlas)
@@ -81,6 +82,14 @@ Staff add items and tap **Send order**; only items added since the last send go 
 QR orders and paid bills notify too. The owner turns alerts on in **Settings → Order
 alerts on this phone** (on iPhone, first Share → Add to Home Screen). Needs the
 `VAPID_*` keys from `.env.example`.
+
+## Close cafe (end of day)
+
+**Tables → Close cafe**: shows open tables / QR orders, asks for the opening cash and
+the cash counted in the drawer, then records the closing and sends the day report:
+the owner’s phone is notified automatically, and the WhatsApp report opens with one
+tap (fully automatic if the WhatsApp Cloud API is configured). The owner sees expected
+cash and the difference live; staff count blind. At 10 PM the owner app reminds to close.
 
 ## Nightly WhatsApp report (10 PM)
 
