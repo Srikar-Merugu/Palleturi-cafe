@@ -24,6 +24,29 @@ const ago = ts => { const m = mins(ts); return m < 1 ? 'just now' : m < 60 ? m +
 const timeStr = d => d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
 const hourLabel = h => `${h % 12 || 12} ${h >= 12 ? 'PM' : 'AM'}`;
 
+/* ---------------- icons (inline SVG, stroke = currentColor) ---------------- */
+const ICONS = {
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  chart: '<path d="M3 20h18"/><path d="M6 16v-5M11 16V6M16 16v-8M20 16v-3"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20.5h.01M17.5 20.5H21V17"/>',
+  sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  lock: '<rect x="4.5" y="11" width="15" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  bell: '<path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 8 2.5 8h-17S6 15 6 9"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/>',
+  receipt: '<path d="M6 3h12v18l-2-1.4-2 1.4-2-1.4-2 1.4-2-1.4L6 21V3z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+  trash: '<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/><path d="M10 11v6M14 11v6"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/>',
+  cash: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 10v4M18 10v4"/>',
+  back: '<path d="m14.5 18-6-6 6-6"/>',
+  cup: '<path d="M4 9.5h12V14a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9.5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 3.5c-.8.9.8 1.6 0 2.5M12 3.5c-.8.9.8 1.6 0 2.5"/>',
+  samosa: '<path d="M12 4 3.5 19h17L12 4z"/><path d="M8.5 15h7M10 11.5h4"/>',
+  bottle: '<path d="M10 2.5h4V5l1.6 2.6V20a1.8 1.8 0 0 1-1.8 1.8h-3.6A1.8 1.8 0 0 1 8.4 20V7.6L10 5V2.5z"/><path d="M8.4 12h7.2M8.4 16h7.2"/>',
+  cookie: '<circle cx="12" cy="12" r="8.5"/><circle cx="9" cy="9" r=".9" fill="currentColor"/><circle cx="14.5" cy="9.5" r=".9" fill="currentColor"/><circle cx="9.5" cy="14.5" r=".9" fill="currentColor"/><circle cx="15" cy="14.5" r=".9" fill="currentColor"/>',
+  cig: '<rect x="2.5" y="13" width="15" height="4" rx="1"/><path d="M13.5 13v4"/><path d="M20.5 13v4M18.5 4.5c0 2 2 2 2 4M16.5 6.5c0 1.5 1 2 1 3"/>',
+};
+const CAT_ICON = { tea: 'cup', snacks: 'samosa', drinks: 'bottle', cookies: 'cookie', cig: 'cig' };
+const ico = (name, size = 22) => `<svg class="i" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+
 function toast(msg) {
   const el = document.createElement('div');
   el.className = 'toast'; el.textContent = msg;
@@ -113,7 +136,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && to
 /* ---------------- routing ---------------- */
 function parts() { return (location.hash.slice(1) || '/').split('/').filter(Boolean); }
 window.addEventListener('hashchange', () => {
-  window.scrollTo(0, 0);
+  window.scrollTo(0, 0); posQ = '';
   if (parts()[0] === 'report' && role === 'owner') { R = null; api('/api/report').then(r => { R = r; render(); }).catch(e => toast(e.message)); }
   render();
 });
@@ -130,24 +153,28 @@ function render() {
   return shell(viewTables(), 'tables');
 }
 
+const NAV = [['', 'tables', 'Tables', 'grid'], ['report', 'report', 'Report', 'chart'], ['qr', 'qr', 'QR codes', 'qr'], ['settings', 'settings', 'Settings', 'sliders']];
 function shell(html, active, qr) {
   const n = S.pending.length;
-  const link = (h, id, label, badge) => `<a href="#/${h}" class="${active === id ? 'on' : ''}">${label}${badge ? `<span class="badge">${badge}</span>` : ''}</a>`;
+  const act = document.activeElement, focusId = act && act.id, caret = act && act.selectionStart;
   const y = window.scrollY;
+  const nav = NAV.filter(([, id]) => id === 'tables' || role === 'owner');
   $('#app').innerHTML = `
-    <header class="top">
-      <a class="brand" href="#/" aria-label="Palleturi Cafe home"><img src="assets/logo.png" alt="Palleturi Cafe"></a>
-      <nav>
-        ${link('', 'tables', 'Tables', n)}
-        ${role === 'owner' ? link('report', 'report', 'Today’s report') + link('qr', 'qr', 'QR stickers') + link('settings', 'settings', 'Settings') : ''}
-      </nav>
-      <div class="top-r">
-        <span class="clock">${timeStr(new Date())}</span>
-        <button class="chip" data-act="logout" title="Lock">${role === 'owner' ? 'Owner' : 'Staff'} · Lock</button>
-      </div>
-    </header>
-    <main>${html}</main>`;
+    <div class="app">
+      <header class="mtop"><img src="assets/logo.png" alt="Palleturi Cafe"><span class="clock">${timeStr(new Date())}</span></header>
+      <aside class="rail" aria-label="Main menu">
+        <a class="rail-logo board" href="#/" aria-label="Palleturi Cafe home"><img src="assets/logo.png" alt=""></a>
+        <nav>${nav.map(([h, id, label, ic]) => `<a href="#/${h}" class="${active === id ? 'on' : ''}" ${active === id ? 'aria-current="page"' : ''}>${ico(ic, 22)}<span>${label}</span>${id === 'tables' && n ? `<span class="badge">${n}</span>` : ''}</a>`).join('')}</nav>
+        <div class="rail-foot">
+          <span class="clock">${timeStr(new Date())}</span>
+          <span class="who">${role === 'owner' ? 'Owner' : 'Staff'}</span>
+          <button data-act="logout" title="Lock the counter">${ico('lock', 20)}<span>Lock</span></button>
+        </div>
+      </aside>
+      <main>${html}</main>
+    </div>`;
   window.scrollTo(0, y);
+  if (focusId) { const el = document.getElementById(focusId); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch (e) {} } }
   if (qr) drawQRs($('#app'));
 }
 
@@ -193,86 +220,120 @@ function logout(expired) {
 }
 
 /* ---------------- tables ---------------- */
+const LATE_MIN = 30; // a table open this long gets a red "long wait" warning
 function viewTables() {
   const pend = S.pending;
+  const open = Object.entries(S.tables).filter(([, t]) => linesCount(t.lines) > 0);
+  const openAmt = open.reduce((a, [, t]) => a + linesTotal(t.lines), 0);
+  const occupied = open.filter(([k]) => +k !== 0).length;
+  const oldest = open.reduce((m, [, t]) => Math.min(m, t.opened || Date.now()), Date.now());
+  const kpis = `
+    <div class="kpis">
+      <div class="kpi"><div class="ico">${ico('grid')}</div><div><div class="k">Tables occupied</div><b>${occupied}<small> / ${S.tableCount}</small></b></div></div>
+      <div class="kpi"><div class="ico">${ico('receipt')}</div><div><div class="k">Running bills</div><b>${rs(openAmt)}</b></div></div>
+      <div class="kpi ${pend.length ? 'hot' : ''}"><div class="ico">${ico('bell')}</div><div><div class="k">New QR orders</div><b>${pend.length}</b></div></div>
+      ${S.today
+        ? `<div class="kpi brand"><div class="ico">${ico('chart')}</div><div><div class="k">Today’s sales</div><b>${rs(S.today.total)} <small>· ${S.today.bills} bills</small></b></div></div>`
+        : `<div class="kpi"><div class="ico">${ico('clock')}</div><div><div class="k">Longest open bill</div><b>${open.length ? `<span data-since="${oldest}">${ago(oldest)}</span>` : '—'}</b></div></div>`}
+    </div>`;
   const incoming = pend.length ? `
-    <h2>Incoming QR orders</h2>
+    <h2>New QR orders</h2>
     <div class="incoming">${pend.map(o => `
       <div class="order-card">
-        <div class="t">${+o.table === 0 ? 'Parcel' : 'T' + o.table}</div>
-        <div class="lines">${Object.entries(o.lines).map(([id, q]) => `${q} × ${esc(item(id)?.name || id)}`).join(', ')}
-          <div class="when" data-since="${o.at}">${ago(o.at)} ago</div></div>
+        <div class="t">${+o.table === 0 ? 'P' : 'T' + o.table}</div>
+        <div class="lines">${Object.entries(o.lines).map(([id, q]) => `<b>${q} ×</b> ${esc(item(id)?.name || id)}`).join(' · ')}
+          <div class="when">${tname(o.table)} · <span data-since="${o.at}">${ago(o.at)}</span> ago</div></div>
         <button class="btn small ghost" data-act="reject" data-oid="${o.id}">Reject</button>
         <button class="btn small gold" data-act="accept" data-oid="${o.id}">Accept</button>
       </div>`).join('')}</div>` : '';
-  const pendFor = t => pend.some(o => +o.table === t);
   const card = t => {
     const tb = S.tables[t]; const busy = tb && linesCount(tb.lines) > 0;
-    const ping = pendFor(t);
-    const st = ping ? 'New QR order' : busy ? `${linesCount(tb.lines)} items · <span data-since="${tb.opened}">${ago(tb.opened)}</span>` : 'Free';
-    return `<a href="#/table/${t}" class="tcard ${busy ? 'busy' : ''} ${ping ? 'ping' : ''} ${t === 0 ? 'parcel' : ''}">
-      <div class="n">${t === 0 ? 'Parcel' : 'T' + t}</div>
-      <div class="st">${st}</div>
-      <div class="amt">${busy ? rs(linesTotal(tb.lines)) : ''}</div></a>`;
+    const ping = pend.some(o => +o.table === t);
+    const late = busy && mins(tb.opened) >= LATE_MIN;
+    const chip = ping ? 'New order' : late ? 'Long wait' : busy ? 'Occupied' : 'Free';
+    return `<a href="#/table/${t}" class="tcard ${busy ? 'busy' : ''} ${late ? 'late' : ''} ${ping ? 'ping' : ''}" aria-label="${tname(t)}, ${chip}${busy ? ', ' + rs(linesTotal(tb.lines)) : ''}">
+      <div class="tc-top"><span class="tc-n">${t === 0 ? 'Parcel' : `<small>T</small>${t}`}</span><span class="chip">${chip}</span></div>
+      ${busy
+        ? `<div class="tc-amt">${rs(linesTotal(tb.lines))}</div><div class="tc-meta">${ico('clock', 14)}<span data-since="${tb.opened}">${ago(tb.opened)}</span><span>·</span><span>${linesCount(tb.lines)} items</span></div>`
+        : `<div class="tc-amt empty">Tap to start a bill</div>`}
+    </a>`;
   };
-  const open = Object.values(S.tables).filter(t => linesCount(t.lines) > 0);
-  const openAmt = open.reduce((a, t) => a + linesTotal(t.lines), 0);
-  return `${incoming}
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
-      <h1>Tables</h1>
-      <div class="sub">${open.length} occupied · ${rs(openAmt)} running</div>
+  return `
+    <div class="page-head">
+      <div><h1>Tables</h1><div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div></div>
+      <div class="legend"><span><i></i>Free</span><span><i class="busy"></i>Occupied</span><span><i class="ping"></i>New QR order</span><span><i class="late"></i>Open ${LATE_MIN}+ min</span></div>
     </div>
+    ${kpis}
+    ${incoming}
     <div class="tables">${Array.from({ length: S.tableCount }, (_, i) => card(i + 1)).join('')}${card(0)}</div>`;
 }
 
 /* ---------------- table billing ---------------- */
-let posCat = 'tea';
+let posCat = 'tea', posQ = '';
+function itemsHTML(t) {
+  const lines = (S.tables[t] || { lines: {} }).lines;
+  const q = posQ.trim().toLowerCase();
+  const list = q ? S.items.filter(i => i.name.toLowerCase().includes(q) || (i.te || '').includes(posQ.trim())) : S.items.filter(i => i.cat === posCat);
+  if (!list.length) return `<div class="none">No items match “${esc(posQ)}”</div>`;
+  return list.map(i => {
+    const n = lines[i.id] || 0;
+    return `<div class="item cat-${esc(i.cat)} ${n ? 'sel' : ''} ${bumpId === i.id ? 'bump' : ''}">
+      <button class="item-add" data-act="add" data-t="${t}" data-id="${i.id}" aria-label="Add ${esc(i.name)}${n ? `, ${n} on bill` : ''}">
+        <span class="ic">${ico(CAT_ICON[i.cat] || 'cup', 20)}</span>
+        <span class="nm">${esc(i.name)}</span>
+        <span class="foot"><span class="pr">${rs(i.price)}</span>${n ? `<span class="q">× ${n}</span>` : ''}</span>
+      </button>
+      ${n ? `<button class="item-minus" data-act="dec" data-t="${t}" data-id="${i.id}" aria-label="Remove one ${esc(i.name)}">−</button>` : ''}
+    </div>`;
+  }).join('');
+}
 function viewTable(t) {
   t = +t;
   if (!(t >= 0 && t <= S.tableCount)) return `<p>Unknown table. <a href="#/">Back</a></p>`;
   const tb = S.tables[t] || { lines: {} };
-  const lines = tb.lines; const total = linesTotal(lines);
-  const items = S.items.filter(i => i.cat === posCat);
+  const lines = tb.lines, total = linesTotal(lines), count = linesCount(lines);
   const billLines = Object.entries(lines).filter(([, q]) => q > 0);
   const pendHere = S.pending.filter(o => +o.table === t);
+  const catCount = c => S.items.filter(i => i.cat === c.id).reduce((a, i) => a + (lines[i.id] || 0), 0);
+  const payBtns = `
+    <button class="paybtn upi" data-act="pay-open" data-m="UPI" data-t="${t}" ${total ? '' : 'disabled'}>${ico('qr', 20)} UPI</button>
+    <button class="paybtn cash" data-act="pay-open" data-m="Cash" data-t="${t}" ${total ? '' : 'disabled'}>${ico('cash', 20)} Cash</button>`;
   return `
-    <div class="pos-head">
-      <a class="back" href="#/" aria-label="Back to tables">‹</a>
-      <div><h1 style="margin:0">${tname(t)}</h1>
-      <div class="sub">${tb.opened ? `Open since ${timeStr(new Date(tb.opened))}` : 'Tap items to start the bill'}</div></div>
-    </div>
-    ${pendHere.map(o => `<div class="order-card" style="margin-bottom:14px"><div class="t">QR</div>
-      <div class="lines">${Object.entries(o.lines).map(([id, q]) => `${q} × ${esc(item(id)?.name || id)}`).join(', ')}</div>
-      <button class="btn small ghost" data-act="reject" data-oid="${o.id}">Reject</button>
-      <button class="btn small gold" data-act="accept" data-oid="${o.id}">Accept</button></div>`).join('')}
     <div class="pos">
       <section>
-        <div class="cats">${S.cats.map(c => {
-          const n = S.items.filter(i => i.cat === c.id).reduce((a, i) => a + (lines[i.id] || 0), 0);
-          return `<button data-act="cat" data-cat="${c.id}" class="${posCat === c.id ? 'on' : ''}">${c.name}${n ? `<span class="cnt">${n}</span>` : ''}</button>`;
-        }).join('')}</div>
-        <div class="items">${items.map(i => `
-          <button class="item ${lines[i.id] ? 'sel' : ''} ${bumpId === i.id ? 'bump' : ''}" data-act="add" data-t="${t}" data-id="${i.id}" aria-label="Add ${esc(i.name)}${lines[i.id] ? `, ${lines[i.id]} on bill` : ''}">
-            <span class="nm">${esc(i.name)}</span>
-            <span class="foot"><span class="pr">${rs(i.price)}</span>${lines[i.id] ? `<span class="q">× ${lines[i.id]}</span>` : ''}</span>
-          </button>`).join('')}</div>
-      </section>
-      <aside class="bill" id="bill">
-        <h2>Bill</h2>
-        ${billLines.length ? billLines.map(([id, q]) => `
-          <div class="line"><span class="nm">${esc(item(id)?.name || id)}</span>
-            <span class="stepper"><button data-act="dec" data-t="${t}" data-id="${id}" aria-label="Remove one">−</button><span>${q}</span><button data-act="add" data-t="${t}" data-id="${id}" aria-label="Add one">+</button></span>
-            <span class="amt">${rs((item(id)?.price || 0) * q)}</span></div>`).join('') : `<div class="empty">No items yet</div>`}
-        <div class="total"><span>Total</span><b>${rs(total)}</b></div>
-        <div class="row">
-          <button class="btn ghost" data-act="clear" data-t="${t}" ${total ? '' : 'disabled'}>Clear</button>
-          <button class="btn gold" data-act="settle" data-t="${t}" ${total ? '' : 'disabled'}>Settle bill</button>
+        <div class="pos-head">
+          <a class="back" href="#/" aria-label="Back to tables">${ico('back', 20)}</a>
+          <div class="ttl"><h1>${tname(t)}</h1>
+            <div class="sub">${tb.opened ? `${ico('clock', 14)} Open since ${timeStr(new Date(tb.opened))} · <span data-since="${tb.opened}">${ago(tb.opened)}</span>` : 'New bill · tap items to add'}</div></div>
+          <label class="search">${ico('search', 18)}<input id="search" type="search" placeholder="Search items…" value="${esc(posQ)}" autocomplete="off" aria-label="Search items"></label>
         </div>
+        ${pendHere.map(o => `<div class="qr-banner">${ico('bell', 20)}
+          <div class="lines"><b>QR order:</b> ${Object.entries(o.lines).map(([id, q]) => `${q} × ${esc(item(id)?.name || id)}`).join(', ')}</div>
+          <button class="btn small ghost" data-act="reject" data-oid="${o.id}">Reject</button>
+          <button class="btn small gold" data-act="accept" data-oid="${o.id}">Accept</button></div>`).join('')}
+        <div class="cats">${S.cats.map(c => { const n = catCount(c); return `<button data-act="cat" data-cat="${c.id}" class="cat-${c.id} ${!posQ && posCat === c.id ? 'on' : ''}"><span class="dot"></span>${c.name}${n ? `<span class="cnt">${n}</span>` : ''}</button>`; }).join('')}</div>
+        <div class="items" id="items">${itemsHTML(t)}</div>
+      </section>
+      <aside class="receipt" id="bill" aria-label="Bill for ${tname(t)}">
+        <div class="r-head">
+          <div class="t"><div class="r-title">${t === 0 ? 'PARCEL' : 'TABLE ' + t}</div>
+            <div class="r-sub">${tb.opened ? `Since ${timeStr(new Date(tb.opened))} · ${count} item${count === 1 ? '' : 's'}` : 'No items yet'}</div></div>
+          ${total ? `<button class="r-clear" data-act="clear" data-t="${t}" aria-label="Clear bill" title="Clear bill">${ico('trash', 18)}</button>` : ''}
+        </div>
+        <div class="r-lines">${billLines.length ? billLines.map(([id, q]) => { const it = item(id); return `
+          <div class="r-line">
+            <div><div class="nm">${esc(it?.name || id)}</div><div class="each">${rs(it?.price || 0)} each</div></div>
+            <span class="stepper"><button data-act="dec" data-t="${t}" data-id="${id}" aria-label="Remove one">−</button><span>${q}</span><button data-act="add" data-t="${t}" data-id="${id}" aria-label="Add one">+</button></span>
+            <span class="amt">${rs((it?.price || 0) * q)}</span>
+          </div>`; }).join('') : `<div class="r-empty">${ico('receipt', 38)}<div>Tap items on the left<br>to add them to this bill</div></div>`}</div>
+        <div class="r-sum">
+          <div class="r-row"><span>Items</span><span class="num">${count}</span></div>
+          <div class="r-total"><span>Total</span><b>${rs(total)}</b></div>
+        </div>
+        <div class="r-pay">${payBtns}</div>
       </aside>
     </div>
-    <div class="mbar"><div class="sum">${linesCount(lines)} items · <b>${rs(total)}</b></div>
-      <a class="btn ghost small" href="#bill" style="color:var(--cream);border-color:rgba(255,241,220,.4)">View bill</a>
-      <button class="btn gold" data-act="settle" data-t="${t}">Settle</button></div>`;
+    <div class="mbar"><div class="sum">${count} item${count === 1 ? '' : 's'}<b>${rs(total)}</b></div>${payBtns}</div>`;
 }
 let bumpId = null, bumpTimer = null;
 function addLine(t, id, d) {
@@ -287,24 +348,52 @@ function addLine(t, id, d) {
   render();
   op(() => api(`/api/tables/${t}/lines`, { method: 'POST', body: { id, d } }));
 }
-function openSettle(t) {
+let payTotal = 0;
+function openPay(t, method) {
   const tb = S.tables[t]; const total = tb ? linesTotal(tb.lines) : 0;
   if (!total) return toast('Bill is empty');
-  const upi = S.settings.upi;
+  payTotal = total;
+  const head = `<div class="sub">${tname(t)} · ${linesCount(tb.lines)} items</div><div class="big">${rs(total)}</div>`;
+  if (method === 'UPI') {
+    const upi = S.settings.upi;
+    $('#modal').innerHTML = `
+      <div class="overlay" data-act="close-modal"><div class="sheet" role="dialog" aria-label="UPI payment">
+        <h1>UPI payment</h1>${head}
+        ${upi ? `<div class="qrbox" data-qr-text="${esc(upiUrl(total))}" data-size="210"></div>
+          <div class="sub" style="margin-bottom:18px">Customer scans with any UPI app · amount is filled in</div>`
+        : `<p class="sub" style="margin-bottom:18px">${role === 'owner' ? 'Add the cafe’s UPI ID in Settings' : 'Ask the owner to add the UPI ID'} to show a payment QR here.</p>`}
+        <div class="row">
+          <button class="btn ghost" data-act="close-modal">Cancel</button>
+          <button class="btn green" data-act="pay" data-t="${t}" data-m="UPI">Payment received</button>
+        </div>
+      </div></div>`;
+    drawQRs($('#modal'));
+    return;
+  }
+  const quick = [50, 100, 200, 500, 1000, 2000].filter(v => v > total).slice(0, 3);
   $('#modal').innerHTML = `
-    <div class="overlay" data-act="close-modal"><div class="sheet" role="dialog" aria-label="Settle bill">
-      <div class="sub">${tname(t)} · ${linesCount(tb.lines)} items</div>
-      <div class="big">${rs(total)}</div>
-      ${upi ? `<div class="qrbox" data-qr-text="${esc(upiUrl(total))}" data-size="200"></div>
-        <div class="sub" style="margin-bottom:16px">Customer scans with any UPI app · amount is filled in</div>`
-      : `<p class="sub" style="margin-bottom:16px">${role === 'owner' ? 'Add the cafe’s UPI ID in Settings' : 'Ask the owner to add the UPI ID'} to show a payment QR here.</p>`}
-      <div class="row" style="margin-bottom:10px">
-        <button class="btn green" data-act="pay" data-t="${t}" data-m="UPI">Paid by UPI</button>
-        <button class="btn gold" data-act="pay" data-t="${t}" data-m="Cash">Paid by Cash</button>
+    <div class="overlay" data-act="close-modal"><div class="sheet" role="dialog" aria-label="Cash payment">
+      <h1>Cash payment</h1>${head}
+      <label class="sub" for="cash" style="display:block;text-align:left">Cash received</label>
+      <div class="cash-in"><span>₹</span><input id="cash" inputmode="numeric" value="${total}" autocomplete="off"></div>
+      <div class="quick">
+        <button data-act="cash-quick" data-v="${total}">Exact</button>
+        ${quick.map(v => `<button data-act="cash-quick" data-v="${v}">₹${v}</button>`).join('')}
       </div>
-      <button class="btn ghost block" data-act="close-modal">Cancel</button>
+      <div class="change ok" id="change"><span>Change to return</span><b>${rs(0)}</b></div>
+      <div class="row">
+        <button class="btn ghost" data-act="close-modal">Cancel</button>
+        <button class="btn gold" id="cash-done" data-act="pay" data-t="${t}" data-m="Cash">Done · settle bill</button>
+      </div>
     </div></div>`;
-  drawQRs($('#modal'));
+  const inp = $('#cash'); inp.focus(); inp.select();
+}
+function updateChange() {
+  const got = parseInt(($('#cash')?.value || '').replace(/\D/g, ''), 10) || 0;
+  const diff = got - payTotal, box = $('#change'); if (!box) return;
+  box.className = 'change ' + (diff >= 0 ? 'ok' : 'short');
+  box.innerHTML = diff >= 0 ? `<span>Change to return</span><b>${rs(diff)}</b>` : `<span>Still to pay</span><b>${rs(-diff)}</b>`;
+  $('#cash-done').disabled = diff < 0;
 }
 async function pay(t, method) {
   closeModal();
@@ -506,11 +595,12 @@ document.addEventListener('click', async e => {
   switch (a) {
     case 'pin': return pressPin(el.dataset.k);
     case 'logout': return logout();
-    case 'cat': posCat = el.dataset.cat; return render();
+    case 'cat': posCat = el.dataset.cat; posQ = ''; return render();
     case 'add': return addLine(t, el.dataset.id, 1);
     case 'dec': return addLine(t, el.dataset.id, -1);
     case 'clear': if (confirm(`Clear the whole bill for ${tname(t)}?`)) { delete S.tables[t]; render(); op(() => api(`/api/tables/${t}`, { method: 'DELETE' })); } return;
-    case 'settle': return openSettle(t);
+    case 'pay-open': return openPay(t, el.dataset.m);
+    case 'cash-quick': $('#cash').value = el.dataset.v; return updateChange();
     case 'pay': return pay(t, el.dataset.m);
     case 'accept': return accept(el.dataset.oid);
     case 'reject': return reject(el.dataset.oid);
@@ -533,6 +623,12 @@ document.addEventListener('click', async e => {
     }
   }
 });
+// Search and cash box update only their own part of the page (keeps typing smooth).
+document.addEventListener('input', e => {
+  if (e.target.id === 'search') { posQ = e.target.value; const box = $('#items'); if (box) box.innerHTML = itemsHTML(+parts()[1]); document.querySelectorAll('.cats button').forEach(b => b.classList.toggle('on', !posQ && b.dataset.cat === posCat)); }
+  else if (e.target.id === 'cash') updateChange();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'cash' && !$('#cash-done').disabled) $('#cash-done').click(); if (e.key === 'Escape' && $('#modal').innerHTML) closeModal(); });
 document.addEventListener('change', async e => {
   const el = e.target;
   if (el.dataset.set) {
@@ -549,7 +645,7 @@ document.addEventListener('change', async e => {
 /* ---------------- clock, timers, 10 PM reminder ---------------- */
 let snoozeUntil = 0;
 setInterval(() => {
-  const c = $('.clock'); if (c) c.textContent = timeStr(new Date());
+  document.querySelectorAll('.clock').forEach(c => { c.textContent = timeStr(new Date()); });
   document.querySelectorAll('[data-since]').forEach(el => { const s = ago(+el.dataset.since); el.textContent = el.closest('.when') ? s + ' ago' : s; });
   if (role === 'owner' && S && new Date().getHours() >= S.reportHour && S.settings.lastReport !== dayKey() && Date.now() > snoozeUntil && !$('#modal').innerHTML) {
     $('#modal').innerHTML = `<div class="overlay"><div class="sheet">

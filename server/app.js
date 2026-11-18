@@ -141,11 +141,18 @@ app.get('/api/state', auth, wrap(async (req, res) => {
   const [items, tables, orders] = await Promise.all([getItems(), col('tables').find().toArray(), col('orders').find().sort({ at: 1 }).toArray()]);
   const settings = { upi: st.upi, wa: st.wa, lastReport: st.lastReport, waAuto: whatsappConfigured() };
   if (req.role === 'owner') Object.assign(settings, { ownerPin: st.ownerPin, staffPin: st.staffPin });
+  // Today's takings, owner only (staff don't see revenue).
+  let today = null;
+  if (req.role === 'owner') {
+    const [agg] = await col('sales').aggregate([{ $match: { day: dayKey() } }, { $group: { _id: null, total: { $sum: '$total' }, bills: { $sum: 1 } } }]).toArray();
+    today = { total: agg?.total || 0, bills: agg?.bills || 0 };
+  }
   res.json({
     role: req.role,
     tableCount: TABLE_COUNT,
     reportHour: REPORT_HOUR,
     rev: st.rev || 0,
+    today,
     cats: CATS,
     items: items.map(itemOut),
     tables: Object.fromEntries(tables.map((t) => [t._id, { lines: t.lines, opened: t.opened }])),
