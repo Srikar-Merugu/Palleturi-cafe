@@ -8,6 +8,7 @@ const { summarize, reportText } = require('./report');
 const { sendWhatsApp, whatsappConfigured } = require('./whatsapp');
 const { notifyOwners, pushConfigured } = require('./push');
 const { registerStock, stockDefaults, isOut } = require('./stock');
+const { registerInsights } = require('./insights');
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
 const DB_NAME = process.env.MONGODB_DB || 'palleturi';
@@ -35,6 +36,7 @@ async function setup() {
   await col('order_log').createIndex({ day: 1 });
   await col('closings').createIndex({ day: 1, at: -1 });
   await col('openings').createIndex({ day: 1, at: -1 });
+  await col('voids').createIndex({ day: 1, at: -1 });
   if (!(await col('items').countDocuments())) await col('items').insertMany(DEFAULT_ITEMS);
   await stockApi.migrate();
   await col('stock_moves').createIndex({ item: 1, at: -1 });
@@ -110,6 +112,7 @@ async function auth(req, res, next) {
 }
 const ownerOnly = (req, res, next) => (req.role === 'owner' ? next() : bad(res, 'Owner only', 403));
 const stockApi = registerStock(app, { col, auth, ownerOnly, wrap, bad, broadcast, notifyOwners, dayKey });
+registerInsights(app, { col, auth, ownerOnly, wrap, getItems });
 
 /* ---------------- public: customer QR menu ---------------- */
 app.get('/api/menu', wrap(async (req, res) => {
@@ -240,10 +243,30 @@ app.post('/api/tables/:t/send', auth, requireOpen(), wrap(async (req, res) => {
   res.json({ ok: true, count: Object.values(fresh).reduce((a, q) => a + q, 0) });
 }));
 
-app.delete('/api/tables/:t', auth, requireOpen(), wrap(async (req, res) => {
-  await col('tables').deleteOne({ _id: Number(req.params.t) });
+// Clearing a bill needs a reason. Every clear is kept in "voids", shown in the report,
+// and the owner's phone is told, so money can't disappear without a trace.
+app.post('/api/tables/:t/clear', auth, requireOpen(), wrap(async (req, res) => {
+  const t = Number(req.params.t);
+  if (!validTable(t)) return bad(res, 'Unknown table');
+  const reason = String(req.body?.reason || '').trim().slice(0, 120);
+  if (!reason) return bad(res, 'Please give a reason for clearing the bill');
+  const tb = await col('tables').findOneAndDelete({ _id: t });
+  if (!tb) return bad(res, 'This table has no bill', 404);
+  const items = await getItems();
+  const lines = Object.entries(tb.lines || {}).filter(([, q]) => q > 0).map(([id, qty]) => {
+    const it = items.find((i) => i._id === id) || { name: id, price: 0 };
+    return { id, name: it.name, price: it.price, qty, sent: Math.min(qty, tb.sent?.[id] || 0) };
+  });
+  const now = new Date();
+  const v = { table: t, lines, total: lines.reduce((a, l) => a + l.price * l.qty, 0), reason, by: req.role, at: now.getTime(), day: dayKey(now), opened: tb.opened || null };
+  await col('voids').insertOne(v);
   await broadcast();
-  res.json({ ok: true });
+  if (v.total) await notifyOwners(col, {
+    title: `⚠️ ${placeName(t)} bill ${rs(v.total)} cleared by ${req.role}`,
+    body: `Reason: ${reason} · ${lines.map((l) => `${l.qty} × ${l.name}`).join(', ')}`,
+    url: '/#/report', tag: `void-${t}-${v.at}`,
+  });
+  res.json({ ok: true, total: v.total });
 }));
 
 app.post('/api/tables/:t/settle', auth, requireOpen(), wrap(async (req, res) => {
@@ -395,8 +418,8 @@ const latestClosing = (day) => col('closings').find({ day }).sort({ at: -1 }).li
 async function buildReport(day) {
   const [sales, open] = await Promise.all([col('sales').find({ day }).toArray(), col('tables').countDocuments()]);
   const r = summarize(sales);
-  const [low, closing] = await Promise.all([stockApi.lowStockList(), latestClosing(day)]);
-  return { day, ...r, open, low, closing, text: reportText(r, day, open, low, closing) };
+  const [low, closing, voids] = await Promise.all([stockApi.lowStockList(), latestClosing(day), col('voids').find({ day }).sort({ at: 1 }).toArray()]);
+  return { day, ...r, open, low, closing, voids, text: reportText(r, day, open, low, closing, voids) };
 }
 
 app.get('/api/report', auth, ownerOnly, wrap(async (req, res) => {
@@ -473,7 +496,7 @@ app.post('/api/demo/seed', auth, ownerOnly, wrap(async (req, res) => {
 }));
 
 app.post('/api/reset', auth, ownerOnly, wrap(async (req, res) => {
-  await Promise.all([col('sales').deleteMany({}), col('tables').deleteMany({}), col('orders').deleteMany({}), col('order_log').deleteMany({}), col('closings').deleteMany({}), col('openings').deleteMany({})]);
+  await Promise.all([col('sales').deleteMany({}), col('tables').deleteMany({}), col('orders').deleteMany({}), col('order_log').deleteMany({}), col('closings').deleteMany({}), col('openings').deleteMany({}), col('voids').deleteMany({})]);
   await broadcast();
   res.json({ ok: true });
 }));

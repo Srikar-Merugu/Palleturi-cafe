@@ -32,7 +32,7 @@ function summarize(sales) {
 }
 
 // closing (optional): { counted, float, expected, diff, by, at, note } from the Close cafe screen
-function reportText(r, day, openTables, low = [], closing = null) {
+function reportText(r, day, openTables, low = [], closing = null, voids = []) {
   const out = ['☕ *Palleturi Cafe — Daily Report*', `📅 ${dayLabel(day)}`, ''];
   for (const g of r.groups) {
     out.push(`*${g.name}* (${g.qty})`);
@@ -43,6 +43,8 @@ function reportText(r, day, openTables, low = [], closing = null) {
   out.push('━━━━━━━━━━━━');
   out.push(`🧾 Bills: ${r.bills}`);
   out.push(`💰 *Total: ${rs(r.total)}*`);
+  const top = r.groups.flatMap((g) => g.rows).sort((a, b) => b.qty - a.qty).slice(0, 3);
+  if (top.length) out.push(`🏆 Best sellers: ${top.map((x) => `${x.name} (${x.qty})`).join(', ')}`);
   out.push(`📱 UPI: ${rs(r.upi)}  ·  💵 Cash: ${rs(r.cash)}`);
   if (r.profit !== null) out.push(`📈 Profit: ${rs(r.profit)} (items with buying price)`);
   if (r.peak !== null) out.push(`⏰ Busiest hour: ${hourLabel(r.peak)} – ${hourLabel((r.peak + 1) % 24)}`);
@@ -54,6 +56,11 @@ function reportText(r, day, openTables, low = [], closing = null) {
     if (closing.openedAt) out.push(`☀️ Opened at ${timeLabel(new Date(closing.openedAt))} by ${closing.openedBy} with ${rs(closing.float)}`);
     if (closing.note) out.push(`Note: ${closing.note}`);
     out.push(`🔒 Closed at ${timeLabel(new Date(closing.at))} by ${closing.by}`);
+  }
+  const lost = voids.filter((v) => v.total);
+  if (lost.length) {
+    out.push('', `🗑️ *Cleared bills: ${lost.length} (${rs(lost.reduce((a, v) => a + v.total, 0))})*`);
+    for (const v of lost) out.push(`• ${v.table === 0 ? 'Parcel' : 'Table ' + v.table} ${rs(v.total)} at ${timeLabel(new Date(v.at))} by ${v.by} — ${v.reason}`);
   }
   if (openTables) out.push(`⚠️ ${openTables} table(s) still not settled`);
   if (low.length) {

@@ -471,7 +471,7 @@ async function refresh() {
     S = await api('/api/state'); role = S.role; lastRev = S.rev;
     const fresh = before ? S.pending.filter(o => !before.has(o.id) && !handled.has(o.id)) : [];
     if (fresh.length) { beep(); fresh.forEach(o => toast(`New order from ${tname(o.table)}`)); }
-    if (parts()[0] === 'report' && role === 'owner') R = await api('/api/report');
+    if (parts()[0] === 'report' && role === 'owner') await loadReport();
     if (parts()[0] === 'stock' && role === 'owner') await loadStock();
     if (!$('#modal').innerHTML) render();
   } catch (e) { if (token) toast(e.message); }
@@ -507,7 +507,7 @@ function parts() { return (location.hash.slice(1) || '/').split('/').filter(Bool
 window.addEventListener('hashchange', () => {
   window.scrollTo(0, 0); posQ = '';
   if (parts()[0] === 'stock' && role === 'owner') loadStock().then(render);
-  if (parts()[0] === 'report' && role === 'owner') { R = null; api('/api/report').then(r => { R = r; render(); }).catch(e => toast(e.message)); }
+  if (parts()[0] === 'report' && role === 'owner') { R = null; reloadReport(); return; }
   render();
 });
 
@@ -855,45 +855,117 @@ async function sendOrder(t) {
   sending = false; render();
 }
 
-/* ---------------- report ---------------- */
+/* ---------------- report: one day, last 7 days, last 30 days ---------------- */
+let RQ = { range: 'day', day: null }, INS = null, repAll = false;
+const RANGES = [['day', 'Day'], ['week', '7 days'], ['month', '30 days']];
+const SPAN = { day: 1, week: 7, month: 30 };
+const shiftDay = (k, n) => { const d = new Date(k + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const fmtDay = (k, o = { weekday: 'short', day: 'numeric', month: 'short' }) => new Date(k + 'T12:00:00Z').toLocaleDateString('en-IN', { ...o, timeZone: 'UTC' });
+async function loadReport() {
+  const q = `range=${RQ.range}&day=${RQ.day || ''}`;
+  const [ins, rep] = await Promise.all([
+    api('/api/insights?' + q),
+    RQ.range === 'day' ? api('/api/report' + (RQ.day ? '?day=' + RQ.day : '')) : Promise.resolve(null),
+  ]);
+  INS = ins; R = rep;
+}
+function reloadReport() { INS = null; render(); loadReport().then(render).catch(e => toast(e.message)); }
+function trend(p, unit = '%') {
+  if (p === null || p === undefined) return '';
+  return `<span class="trend ${p > 0 ? 'up' : p < 0 ? 'down' : ''}">${p > 0 ? '▲' : p < 0 ? '▼' : '•'} ${Math.abs(p)}${unit}</span>`;
+}
+function periodLabel(x) {
+  if (x.range === 'day') return x.end === x.today ? 'Today' : x.end === shiftDay(x.today, -1) ? 'Yesterday' : fmtDay(x.end, { weekday: 'long', day: 'numeric', month: 'long' });
+  return `${fmtDay(x.start, { day: 'numeric', month: 'short' })} – ${fmtDay(x.end, { day: 'numeric', month: 'short' })}`;
+}
+function vsLabel(x) { return x.range === 'day' ? 'vs day before' : `vs previous ${SPAN[x.range]} days`; }
+
 function viewReport() {
-  if (!R) return `<h1>Today’s report</h1><p class="sub">Loading…</p>`;
-  const r = R;
-  const max = Math.max(1, ...r.byHour.slice(8, 23));
-  const hours = Array.from({ length: 15 }, (_, i) => i + 8); // 8 AM – 10 PM
-  return `
-    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:10px">
-      <h1>Today’s report</h1><div class="sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
-    </div>
+  const x = INS;
+  const head = `<div class="rep-head">
+      <h1>Reports</h1>
+      <div class="seg">${RANGES.map(([k, n]) => `<button class="${RQ.range === k ? 'on' : ''}" data-act="rep-range" data-r="${k}">${n}</button>`).join('')}</div>
+      <div class="rep-step">
+        <button class="btn ghost small" data-act="rep-step" data-n="-1" aria-label="Earlier">${ico('back', 16)}</button>
+        <b>${x ? periodLabel(x) : '…'}</b>
+        <button class="btn ghost small flip" data-act="rep-step" data-n="1" aria-label="Later" ${!x || x.end >= x.today ? 'disabled' : ''}>${ico('back', 16)}</button>
+      </div>
+    </div>`;
+  if (!x) return head + `<p class="sub">Loading…</p>`;
+  const top = x.items[0]?.qty || 1;
+  const shown = repAll ? x.items : x.items.slice(0, 10);
+  const vs = vsLabel(x);
+  const isToday = x.range === 'day' && x.end === x.today;
+
+  const best = x.items.length ? `<div class="best">${shown.map(i => `
+      <div class="b-row">
+        <span class="rk ${i.rank <= 3 ? 'r' + i.rank : ''}">${i.rank}</span>
+        <div class="b-main">
+          <div class="b-top"><b>${esc(i.name)}</b><span><b>× ${i.qty}</b> · ${rs(i.amt)}</span></div>
+          <div class="b-bar cat-${i.cat}"><i style="width:${Math.max(3, (i.qty / top) * 100)}%"></i></div>
+        </div>
+        <div class="b-chg">${i.prevQty ? trend(i.qty - i.prevQty, '') : `<span class="trend new">new</span>`}</div>
+      </div>`).join('')}</div>
+      ${x.items.length > 10 ? `<button class="btn ghost block small" style="margin-top:10px" data-act="rep-all">${repAll ? 'Show top 10' : `Show all ${x.items.length} items`}</button>` : ''}`
+    : `<p class="sub">No bills settled ${x.range === 'day' ? 'on this day' : 'in these days'}.${isToday ? ' In Settings you can load a demo day to see how this looks.' : ''}</p>`;
+
+  const moves = (x.rising.length || x.falling.length) ? `<h2 style="margin-top:22px">Changes ${vs}</h2>
+      ${x.rising.length ? `<div class="mv up"><span>Selling more</span>${x.rising.map(m => `<i>${esc(m.name)} <b>+${m.diff}</b></i>`).join('')}</div>` : ''}
+      ${x.falling.length ? `<div class="mv down"><span>Selling less</span>${x.falling.map(m => `<i>${esc(m.name)} <b>${m.diff}</b></i>`).join('')}</div>` : ''}` : '';
+  const dead = x.notSelling.length && x.items.length ? `<h2 style="margin-top:22px">Not sold even once</h2>
+      <p class="sub" style="margin-top:-6px">Think about removing these or putting them on offer.</p>
+      <div class="mv">${x.notSelling.map(m => `<i>${esc(m.name)}</i>`).join('')}</div>` : '';
+
+  let chart;
+  if (x.range === 'day') {
+    const hours = Array.from({ length: 15 }, (_, i) => i + 8); // 8 AM – 10 PM
+    const max = Math.max(1, ...x.byHour.slice(8, 23));
+    chart = `<h2>Sales by hour</h2>
+      ${x.peak !== null ? `<p class="sub" style="margin-top:-6px">Busiest: ${hourLabel(x.peak)} – ${hourLabel((x.peak + 1) % 24)}</p>` : ''}
+      <div class="bars">${hours.map(h => `<div class="${h === x.peak ? 'top1' : ''}" style="height:${(x.byHour[h] / max) * 100}%" title="${hourLabel(h)}: ${rs(x.byHour[h])}"></div>`).join('')}</div>
+      <div class="bars-x">${hours.map(h => `<span>${h % 3 === 2 ? hourLabel(h).replace(' ', '') : ''}</span>`).join('')}</div>`;
+  } else {
+    const max = Math.max(1, ...x.daily.map(d => d.total));
+    const every = x.range === 'week' ? 1 : 5;
+    chart = `<h2>Sales by day</h2>
+      ${x.bestDay ? `<p class="sub" style="margin-top:-6px">Best day: ${fmtDay(x.bestDay.day)} · ${rs(x.bestDay.total)}</p>` : ''}
+      <div class="bars">${x.daily.map(d => `<div class="${x.bestDay && d.day === x.bestDay.day ? 'top1' : ''}" style="height:${(d.total / max) * 100}%" title="${fmtDay(d.day)}: ${rs(d.total)} · ${d.bills} bills"></div>`).join('')}</div>
+      <div class="bars-x">${x.daily.map((d, i) => `<span>${(x.daily.length - 1 - i) % every === 0 ? (x.range === 'week' ? fmtDay(d.day, { weekday: 'short' }) : fmtDay(d.day, { day: 'numeric' })) : ''}</span>`).join('')}</div>`;
+  }
+
+  const voids = x.voids.count ? `<div class="panel void-panel">
+      <h2>${ico('trash', 18)} Cleared bills · ${x.voids.count} · ${rs(x.voids.amount)}</h2>
+      <table class="list">${x.voids.list.map(v => `<tr><td><b>${tname(v.table)}</b> · ${esc(v.reason)}<div class="sub">${x.range === 'day' ? '' : fmtDay(v.day) + ' · '}${timeStr(new Date(v.at))} by ${esc(v.by)} · ${v.lines.map(l => `${l.qty} × ${esc(l.name)}`).join(', ') || 'empty'}</div></td><td class="r">${rs(v.total)}</td></tr>`).join('')}</table>
+    </div>` : '';
+
+  const wa = isToday && R ? `<div class="panel">
+      <h2>WhatsApp message</h2>
+      <p class="sub" style="margin-top:-6px">Goes to +${esc(R.wa)} at ${hourLabel(S.reportHour)}${R.waAuto ? ' automatically' : ''}</p>
+      <div class="wa-preview"><div class="bubble">${esc(R.text)}</div></div>
+      <button class="btn green block" style="margin-top:14px" data-act="wa-send">Send to WhatsApp now</button>
+    </div>` : '';
+  const low = isToday && R && R.low && R.low.length ? `<div class="panel"><h2>Low stock</h2><table class="list">${R.low.map(i => `<tr><td>${esc(i.name)}</td><td class="r" style="color:${i.stock <= 0 ? 'var(--red)' : 'var(--gold)'}">${i.stock <= 0 ? 'Out' : i.stock + ' ' + esc(i.unit) + ' left'}</td></tr>`).join('')}</table></div>` : '';
+
+  return head + `
     <div class="stats">
-      <div class="stat hero"><div class="k">Total sales</div><div class="v">${rs(r.total)}</div>${r.profit !== null ? `<div class="k" style="margin-top:4px">Profit ${rs(r.profit)}</div>` : ''}</div>
-      <div class="stat"><div class="k">Bills</div><div class="v">${r.bills}</div></div>
-      <div class="stat"><div class="k">UPI</div><div class="v">${rs(r.upi)}</div></div>
-      <div class="stat"><div class="k">Cash</div><div class="v">${rs(r.cash)}</div></div>
+      <div class="stat hero"><div class="k">Total sales</div><div class="v">${rs(x.total)}</div>
+        <div class="k sm">${trend(x.change.total)} ${x.change.total !== null ? vs : ''}${x.profit !== null ? ` · profit ${rs(x.profit)}` : ''}</div></div>
+      <div class="stat"><div class="k">Bills</div><div class="v">${x.bills}</div><div class="k sm">${trend(x.change.bills)}</div></div>
+      <div class="stat"><div class="k">Average bill</div><div class="v">${rs(x.avgBill)}</div><div class="k sm">${x.prev.avgBill ? `was ${rs(x.prev.avgBill)}` : ''}</div></div>
+      <div class="stat"><div class="k">UPI · Cash</div><div class="v sm">${rs(x.upi)} <small>·</small> ${rs(x.cash)}</div></div>
     </div>
     <div class="rgrid">
-      <div class="panel">
-        <h2>Items sold</h2>
-        ${r.groups.length ? `<table class="list">${r.groups.map(g => `<tr class="cat"><td>${g.name}</td><td class="r">${g.qty}</td><td></td></tr>
-          ${g.rows.map(x => `<tr><td>${esc(x.name)}</td><td class="r">× ${x.qty}</td><td class="r">${rs(x.amt)}</td></tr>`).join('')}`).join('')}</table>`
-        : `<p class="sub">No bills settled yet today. In Settings you can load a demo day to see how this looks.</p>`}
-        ${r.low && r.low.length ? `<h2 style="margin-top:22px">Low stock</h2><table class="list">${r.low.map(x => `<tr><td>${esc(x.name)}</td><td class="r" style="color:${x.stock <= 0 ? 'var(--red)' : 'var(--gold)'}">${x.stock <= 0 ? 'Out' : x.stock + ' ' + esc(x.unit) + ' left'}</td></tr>`).join('')}</table>` : ''}
-        <h2 style="margin-top:22px">Sales by hour</h2>
-        <div class="bars">${hours.map(h => `<div class="${h === r.peak ? 'top1' : ''}" style="height:${(r.byHour[h] / max) * 100}%" title="${hourLabel(h)}: ${rs(r.byHour[h])}"></div>`).join('')}</div>
-        <div class="bars-x">${hours.map(h => `<span>${h % 3 === 2 ? hourLabel(h).replace(' ', '') : ''}</span>`).join('')}</div>
-      </div>
-      <div class="panel">
-        <h2>WhatsApp message</h2>
-        <p class="sub" style="margin-top:-6px">Goes to +${esc(r.wa)} at ${hourLabel(S.reportHour)}${r.waAuto ? ' automatically' : ''}</p>
-        <div class="wa-preview"><div class="bubble">${esc(r.text)}</div></div>
-        <button class="btn green block" style="margin-top:14px" data-act="wa-send">Send to WhatsApp now</button>
+      <div class="panel"><h2>${ico('chart', 18)} Best sellers</h2>${best}${moves}${dead}</div>
+      <div class="rcol">
+        <div class="panel">${chart}</div>
+        ${voids}${low}${wa}
       </div>
     </div>`;
 }
 async function sendReport() {
   if (!S.settings.waAuto) {
     // One tap: open WhatsApp with the report typed in, and mark today as sent.
-    const r = R || await api('/api/report').catch(() => null);
+    const r = await api('/api/report').catch(() => null);
     if (!r) return toast('Could not build the report');
     window.open(`https://wa.me/${r.wa}?text=${encodeURIComponent(r.text)}`, '_blank', 'noopener');
     op(() => api('/api/report/send', { method: 'POST' }));
@@ -971,6 +1043,29 @@ function viewSettings() {
     </div>`;
 }
 
+/* ---------------- clear a bill (needs a reason; the owner is told) ---------------- */
+const CLEAR_REASONS = ['Customer left', 'Wrong entry', 'Customer changed mind', 'Other'];
+function openClear(t) {
+  const tb = S.tables[t]; if (!tb) return;
+  const amt = linesTotal(tb.lines), n = linesCount(tb.lines);
+  $('#modal').innerHTML = `<div class="overlay" data-act="close-modal"><div class="sheet left" role="dialog" aria-label="Clear bill">
+    <div class="day-head">${ico('trash', 24)}<div><h1>Clear ${tname(t)} bill?</h1><div class="sub">${n} item${n === 1 ? '' : 's'} · ${rs(amt)}</div></div></div>
+    <div class="field"><label>Why are you clearing it?</label><div class="cats wrap" id="clr-reason">${CLEAR_REASONS.map(r => `<button data-act="clr-reason" data-r="${r}">${r}</button>`).join('')}</div></div>
+    <div class="field"><input id="clr-note" maxlength="100" placeholder="Add details (optional)" autocomplete="off"></div>
+    <p class="hint">${role === 'owner' ? 'It is kept in the report under Cleared bills.' : 'The owner will see this in the report and on their phone.'}</p>
+    <div class="row"><button class="btn ghost" data-act="close-modal">Cancel</button><button class="btn danger" data-act="clr-go" data-t="${t}">${ico('trash', 16)} Clear bill</button></div>
+  </div></div>`;
+}
+async function clearGo(t) {
+  const pick = $('#clr-reason .on')?.dataset.r, note = ($('#clr-note').value || '').trim();
+  if (!pick) return toast('Pick a reason');
+  if (pick === 'Other' && !note) { $('#clr-note').focus(); return toast('Write the reason'); }
+  const reason = pick === 'Other' ? note : note ? `${pick}: ${note}` : pick;
+  closeModal(); delete S.tables[t]; render();
+  const r = await op(() => api(`/api/tables/${t}/clear`, { method: 'POST', body: { reason } }));
+  if (r) toast('Bill cleared');
+}
+
 /* ---------------- events ---------------- */
 document.addEventListener('click', async e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
@@ -983,7 +1078,12 @@ document.addEventListener('click', async e => {
     case 'cat': posCat = el.dataset.cat; posQ = ''; return render();
     case 'add': return addLine(t, el.dataset.id, 1);
     case 'dec': return addLine(t, el.dataset.id, -1);
-    case 'clear': if (confirm(`Clear the whole bill for ${tname(t)}?`)) { delete S.tables[t]; render(); op(() => api(`/api/tables/${t}`, { method: 'DELETE' })); } return;
+    case 'clear': return openClear(t);
+    case 'clr-reason': document.querySelectorAll('#clr-reason button').forEach(b => b.classList.toggle('on', b === el)); $('#clr-note').placeholder = el.dataset.r === 'Other' ? 'Write the reason' : 'Add details (optional)'; return;
+    case 'clr-go': return clearGo(t);
+    case 'rep-range': RQ.range = el.dataset.r; repAll = false; return reloadReport();
+    case 'rep-step': { if (!INS) return; const base = INS.end, today = INS.today; let d = shiftDay(base, (+el.dataset.n) * SPAN[RQ.range]); if (today && d >= today) d = null; RQ.day = d; return reloadReport(); }
+    case 'rep-all': repAll = !repAll; return render();
     case 'send': { const tb = S.tables[t]; if (tb) { tb.sent = { ...tb.lines }; render(); } const r = await op(() => api(`/api/tables/${t}/send`, { method: 'POST' })); if (r) toast(`Order sent · ${r.count} item${r.count === 1 ? '' : 's'}`); return; }
     case 'push-on': return enablePush();
     case 'push-off': return disablePush();
